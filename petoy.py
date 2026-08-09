@@ -39,18 +39,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
-        # Get the update from Telegram
         update_data = request.get_json()
         update = Update.de_json(update_data, None)
         
-        # Process the update
+        # Build the application
         application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         application.add_handler(CommandHandler("start", start))
-        
-        # Create a context
-        from telegram.ext import ContextTypes
-        context = ContextTypes.DEFAULT_TYPE(application)
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         
         # Process the update
         application.process_update(update)
@@ -64,5 +59,4 @@ def home():
     return "🤖 Petoy 2.0 is running!", 200
 
 if __name__ == "__main__":
-    # Set up webhook
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
