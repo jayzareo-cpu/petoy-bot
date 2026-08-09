@@ -5,11 +5,23 @@ import logging
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
 
-# Enable logging so you can see what's happening
+# Enable logging
 logging.basicConfig(level=logging.INFO)
 
+# Environment variables
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+
+# Check if environment variables are set
+if not GEMINI_API_KEY:
+    logging.error("❌ GEMINI_API_KEY is not set!")
+    exit(1)
+
+if not TELEGRAM_BOT_TOKEN:
+    logging.error("❌ TELEGRAM_BOT_TOKEN is not set!")
+    exit(1)
+
+logging.info("✅ Environment variables loaded successfully.")
 
 def ask_gemini(question):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={GEMINI_API_KEY}"
@@ -29,11 +41,11 @@ def ask_gemini(question):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user_message = update.message.text
-        logging.info(f"Received: {user_message}")
+        logging.info(f"📩 Received: {user_message}")
         reply = ask_gemini(user_message)
         await update.message.reply_text(reply)
     except Exception as e:
-        logging.error(f"Error: {e}")
+        logging.error(f"❌ Error: {e}")
         await update.message.reply_text(f"Error: {e}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -45,7 +57,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    logging.info("✅ Bot is running with polling!")
+    logging.info("✅ Bot is running!")
     app.run_polling()
 
 if __name__ == "__main__":
