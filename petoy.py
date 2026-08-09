@@ -29,9 +29,12 @@ def ask_gemini(question):
         return f"Error: {e}"
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_message = update.message.text
-    reply = ask_gemini(user_message)
-    await update.message.reply_text(reply)
+    try:
+        user_message = update.message.text
+        reply = ask_gemini(user_message)
+        await update.message.reply_text(reply)
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🤖 Hello! I'm Petoy 2.0. Send me anything!")
@@ -47,14 +50,18 @@ def webhook():
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         
         application.process_update(update)
-        
         return jsonify({"status": "ok"}), 200
     except Exception as e:
+        print(f"Error: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/', methods=['GET'])
 def home():
     return "🤖 Petoy 2.0 is running!", 200
+
+@app.route('/test', methods=['GET'])
+def test():
+    return jsonify({"status": "alive"}), 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
