@@ -42,12 +42,10 @@ def webhook():
         update_data = request.get_json()
         update = Update.de_json(update_data, None)
         
-        # Build the application
         application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
         application.add_handler(CommandHandler("start", start))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         
-        # Process the update
         application.process_update(update)
         
         return jsonify({"status": "ok"}), 200
