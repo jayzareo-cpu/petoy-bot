@@ -1,6 +1,7 @@
 import os
 import requests
 import json
+from flask import Flask, request, jsonify
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
 
@@ -9,6 +10,8 @@ from telegram.ext import Application, MessageHandler, filters, ContextTypes, Com
 # ============================================
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+
+app = Flask(__name__)
 
 def ask_gemini(question):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={GEMINI_API_KEY}"
@@ -33,13 +36,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🤖 Hello! I'm Petoy 2.0. Send me anything!")
 
-def main():
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(CommandHandler("start", start))
-    
-    print("🤖 Petoy 2.0 is running on Render!")
-    app.run_polling()
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    try:
+        # Get the update from Telegram
+        update_data = request.get_json()
+        update = Update.de_json(update_data, None)
+        
+        # Process the update
+        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        application.add_handler(CommandHandler("start", start))
+        
+        # Create a context
+        from telegram.ext import ContextTypes
+        context = ContextTypes.DEFAULT_TYPE(application)
+        
+        # Process the update
+        application.process_update(update)
+        
+        return jsonify({"status": "ok"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/', methods=['GET'])
+def home():
+    return "🤖 Petoy 2.0 is running!", 200
 
 if __name__ == "__main__":
-    main()
+    # Set up webhook
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
