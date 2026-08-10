@@ -1,6 +1,8 @@
 import os
 import logging
 import threading
+import re
+import requests
 import psycopg2
 import psycopg2.extras
 from flask import Flask
@@ -18,7 +20,7 @@ if not all([GROQ_API_KEY, TELEGRAM_BOT_TOKEN, DATABASE_URL]):
     exit(1)
 
 # ============================================
-# DATABASE (IPv4 Fix)
+# DATABASE
 # ============================================
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL, sslmode='require')
@@ -38,7 +40,7 @@ def init_db():
         ''')
         conn.commit()
         conn.close()
-        logging.info("✅ Database connected via IPv4")
+        logging.info("✅ Database connected")
     except Exception as e:
         logging.error(f"❌ DB init error: {e}")
 
@@ -52,7 +54,6 @@ def save_message(user_id, role, content):
         )
         conn.commit()
         conn.close()
-        logging.info(f"💾 Saved: {content[:30]}...")
     except Exception as e:
         logging.error(f"❌ Save error: {e}")
 
@@ -86,10 +87,39 @@ def run_flask():
     app.run(host="0.0.0.0", port=10000)
 
 # ============================================
-# GROQ AI
+# IMAGE GENERATION (Pollinations)
+# ============================================
+def generate_image(prompt):
+    enhanced_prompt = f"{prompt}, high quality, detailed, 4k"
+    url = f"https://image.pollinations.ai/prompt/{enhanced_prompt.replace(' ', '%20')}"
+    try:
+        response = requests.get(url, timeout=30)
+        if response.status_code == 200:
+            return response.content
+        return None
+    except:
+        return None
+
+def extract_image_prompt(text):
+    triggers = [
+        r'make me (?:an? )?image of (.+)',
+        r'generate (?:an? )?image of (.+)',
+        r'create (?:an? )?image of (.+)',
+        r'draw (?:an? )?image of (.+)',
+        r'show me (?:an? )?image of (.+)',
+        r'image of (.+)',
+        r'picture of (.+)',
+    ]
+    for pattern in triggers:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+    return None
+
+# ============================================
+# GROQ AI (English Only)
 # ============================================
 def ask_groq(user_id, question):
-    import requests
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
@@ -97,7 +127,7 @@ def ask_groq(user_id, question):
     }
     
     messages = [
-        {"role": "system", "content": "You are Petoy, an AI assistant created by Jay. You remember everything. Respond in Filipino if asked."}
+        {"role": "system", "content": "You are Petoy, an AI assistant created by Jay. You remember everything. ALWAYS respond in English. Never use Filipino/Tagalog."}
     ]
     
     history = get_history(user_id)
@@ -132,9 +162,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 Hello! I'm Petoy 2.0.\n\n"
         "💬 I remember everything you tell me.\n"
-        "🇵🇭 I can speak Filipino too!\n"
-        "🧠 Just chat with me normally."
+        "🖼️ Send: 'make me an image of a cat'\n"
+        "🗣️ I only speak English.\n\n"
+        "How can I help you today?"
     )
+
+async def image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    prompt = ' '.join(context.args)
+    if not prompt:
+        await update.message.reply_text("❌ Please provide a prompt! Example: /image a cat in space")
+        return
+    
+    await update.message.reply_text("🎨 Generating your image...")
+    image_data = generate_image(prompt)
+    
+    if image_data:
+        await update.message.reply_photo(
+            photo=image_data,
+            caption=f"🖼️ Here's your image: {prompt}"
+        )
+    else:
+        await update.message.reply_text("❌ Sorry, I couldn't generate that image. Please try a different prompt.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -142,8 +190,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = update.message.text
         logging.info(f"📩 {user_id}: {text}")
         
+        # Check for image request
+        image_prompt = extract_image_prompt(text)
+        if image_prompt:
+            await update.message.reply_text("🎨 Generating your image...")
+            image_data = generate_image(image_prompt)
+            if image_data:
+                await update.message.reply_photo(
+                    photo=image_data,
+                    caption=f"🖼️ Here's your image: {image_prompt}"
+                )
+            else:
+                await update.message.reply_text("❌ Sorry, I couldn't generate that image. Please try a different prompt.")
+            return
+        
+        # Normal chat
         reply = ask_groq(user_id, text)
         await update.message.reply_text(reply)
+        
     except Exception as e:
         logging.error(f"❌ Error: {e}")
         await update.message.reply_text("Error. Please try again.")
@@ -157,6 +221,7 @@ def main():
     
     bot = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     bot.add_handler(CommandHandler("start", start))
+    bot.add_handler(CommandHandler("image", image))
     bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     logging.info("✅ Petoy 2.0 is running!")
