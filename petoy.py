@@ -1,11 +1,11 @@
 import os
 import logging
 import threading
+import psycopg2
+import psycopg2.extras
 from flask import Flask
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
-import psycopg2
-from psycopg2.extras import RealDictCursor
 
 logging.basicConfig(level=logging.INFO)
 
@@ -18,27 +18,33 @@ if not all([GROQ_API_KEY, TELEGRAM_BOT_TOKEN, DATABASE_URL]):
     exit(1)
 
 # ============================================
-# DATABASE
+# DATABASE (IPv4 Fix)
 # ============================================
+def get_db_connection():
+    return psycopg2.connect(DATABASE_URL, sslmode='require')
+
 def init_db():
-    conn = psycopg2.connect(DATABASE_URL)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS messages (
-            id SERIAL PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    conn.commit()
-    conn.close()
-    logging.info("✅ Database ready")
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS messages (
+                id SERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.commit()
+        conn.close()
+        logging.info("✅ Database connected via IPv4")
+    except Exception as e:
+        logging.error(f"❌ DB init error: {e}")
 
 def save_message(user_id, role, content):
     try:
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO messages (user_id, role, content) VALUES (%s, %s, %s)",
@@ -52,8 +58,8 @@ def save_message(user_id, role, content):
 
 def get_history(user_id):
     try:
-        conn = psycopg2.connect(DATABASE_URL)
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute(
             "SELECT role, content FROM messages WHERE user_id = %s ORDER BY id LIMIT 15",
             (user_id,)
