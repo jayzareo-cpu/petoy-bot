@@ -3,11 +3,12 @@ import requests
 import json
 import logging
 import threading
-import sqlite3
 import re
 from flask import Flask
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 # Enable logging
 logging.basicConfig(level=logging.INFO)
@@ -15,7 +16,7 @@ logging.basicConfig(level=logging.INFO)
 # Environment variables
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-HUGGINGFACE_TOKEN = os.environ.get("HUGGINGFACE_TOKEN")
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
 if not GROQ_API_KEY:
     logging.error("❌ GROQ_API_KEY is not set!")
@@ -25,96 +26,96 @@ if not TELEGRAM_BOT_TOKEN:
     logging.error("❌ TELEGRAM_BOT_TOKEN is not set!")
     exit(1)
 
-if not HUGGINGFACE_TOKEN:
-    logging.warning("⚠️ HUGGINGFACE_TOKEN is not set! Image generation will not work.")
+if not DATABASE_URL:
+    logging.error("❌ DATABASE_URL is not set! Memory will not work!")
+    exit(1)
 
 logging.info("✅ Environment variables loaded successfully.")
 
 # ============================================
-# PERMANENT DATABASE (SQLite)
+# PERMANENT DATABASE (Supabase PostgreSQL)
 # ============================================
 def init_db():
-    conn = sqlite3.connect('conversations.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT,
-            role TEXT,
-            content TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    conn.commit()
-    conn.close()
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS messages (
+                id SERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.commit()
+        conn.close()
+        logging.info("✅ Supabase database initialized!")
+    except Exception as e:
+        logging.error(f"❌ Database init error: {e}")
 
 def save_message(user_id, role, content):
-    conn = sqlite3.connect('conversations.db')
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO messages (user_id, role, content) VALUES (?, ?, ?)",
-        (user_id, role, content)
-    )
-    conn.commit()
-    conn.close()
+    try:
+        logging.info(f"💾 Saving: user={user_id}, role={role}, content={content[:30]}...")
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO messages (user_id, role, content) VALUES (%s, %s, %s)",
+            (user_id, role, content)
+        )
+        conn.commit()
+        conn.close()
+        logging.info("✅ Message saved successfully!")
+    except Exception as e:
+        logging.error(f"❌ Save error: {e}")
 
 def get_history(user_id):
-    conn = sqlite3.connect('conversations.db')
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT role, content FROM messages WHERE user_id = ? ORDER BY id",
-        (user_id,)
-    )
-    rows = cursor.fetchall()
-    conn.close()
-    return [{"role": row[0], "content": row[1]} for row in rows]
+    try:
+        logging.info(f"📚 Fetching history for user: {user_id}")
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(
+            "SELECT role, content FROM messages WHERE user_id = %s ORDER BY id",
+            (user_id,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        logging.info(f"📚 Retrieved {len(rows)} messages for user {user_id}")
+        return [{"role": row["role"], "content": row["content"]} for row in rows]
+    except Exception as e:
+        logging.error(f"❌ Get history error: {e}")
+        return []
 
 init_db()
 
 # ============================================
-# FLASK SERVER (Keeps Render happy)
+# FLASK SERVER
 # ============================================
 flask_app = Flask(__name__)
 
 @flask_app.route('/')
 def home():
-    return "🤖 Petoy 2.0 is running with FLUX image generation!"
+    return "🤖 Petoy 2.0 is running with Supabase memory!"
 
 def run_flask():
     flask_app.run(host="0.0.0.0", port=10000)
 
 # ============================================
-# FLUX IMAGE GENERATOR (Hugging Face API)
+# IMAGE GENERATOR (Pollinations AI)
 # ============================================
-def generate_flux_image(prompt):
-    """Generate an image using FLUX via Hugging Face API"""
-    if not HUGGINGFACE_TOKEN:
-        return None
-    
+def generate_image(prompt):
     enhanced_prompt = f"{prompt}, high quality, detailed, 4k, photorealistic"
-    
-    url = "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-dev"
-    headers = {
-        "Authorization": f"Bearer {HUGGINGFACE_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "inputs": enhanced_prompt,
-        "parameters": {
-            "num_inference_steps": 28,
-            "guidance_scale": 7.5
-        }
-    }
+    url = f"https://image.pollinations.ai/prompt/{enhanced_prompt.replace(' ', '%20')}"
     
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=120)
+        response = requests.get(url, timeout=60)
         if response.status_code == 200:
             return response.content
         else:
-            logging.error(f"FLUX API error: {response.status_code} - {response.text}")
+            logging.error(f"Pollinations error: {response.status_code}")
             return None
     except Exception as e:
-        logging.error(f"FLUX generation error: {e}")
+        logging.error(f"Image generation error: {e}")
         return None
 
 # ============================================
@@ -161,7 +162,6 @@ def ask_groq_with_memory(user_id, question):
 # NATURAL LANGUAGE IMAGE TRIGGERS
 # ============================================
 def extract_image_prompt(text):
-    """Check if user wants an image and extract the prompt"""
     triggers = [
         r'make me (?:an? )?image of (.+)',
         r'make me (?:an? )?picture of (.+)',
@@ -197,16 +197,18 @@ def extract_image_prompt(text):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user_id = str(update.message.from_user.id)
+        logging.info(f"👤 User ID: {user_id}")
+        
         user_message = update.message.text
-        logging.info(f"📩 Received from {user_id}: {user_message}")
+        logging.info(f"📩 Received: {user_message}")
         
         image_prompt = extract_image_prompt(user_message)
         
         if image_prompt:
             logging.info(f"🖼️ Image requested: {image_prompt}")
-            await update.message.reply_text("🎨 Generating your image with FLUX... (this may take 10-30 seconds)")
+            await update.message.reply_text("🎨 Generating your image... (this may take a few seconds)")
             
-            image_data = generate_flux_image(image_prompt)
+            image_data = generate_image(image_prompt)
             
             if image_data:
                 await update.message.reply_photo(
@@ -227,13 +229,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.message.from_user.id)
     await update.message.reply_text(
-        "🤖 Hello! I'm Petoy 2.0 with FLUX image generation!\n\n"
+        "🤖 Hello! I'm Petoy 2.0 with image generation!\n\n"
         "💬 You can chat with me normally, or say:\n"
         "• 'make me an image of a cat'\n"
         "• 'generate a picture of a sunset'\n"
         "• 'draw a dragon'\n"
         "• 'show me a photo of a robot'\n\n"
-        "🧠 I remember everything you tell me!"
+        "🧠 I remember everything you tell me — even after restarts!"
     )
 
 # ============================================
@@ -241,14 +243,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
-    logging.info("🚀 Petoy 2.0 starting with FLUX image generation...")
+    logging.info("🚀 Petoy 2.0 starting with image generation...")
     
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    logging.info("✅ Petoy 2.0 is running with Groq AI + FLUX image generation!")
+    logging.info("✅ Petoy 2.0 is running with Groq AI + Image Generation!")
     app.run_polling()
 
 if __name__ == "__main__":
