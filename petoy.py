@@ -154,16 +154,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # MAIN
 # ============================================
 def main():
+    # Start Flask server in a background thread
     threading.Thread(target=run_flask, daemon=True).start()
     logging.info("🚀 Petoy 2.0 starting with Groq and PERMANENT memory...")
     
+    # Create the Telegram application
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
-    # Command handlers
+    # ✅ COMMAND HANDLERS (These are registered first)
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("image", image))  # 🖼️ Image generator
+    app.add_handler(CommandHandler("image", image))  # 🖼️ Image generator - FIXED!
     
-    # Message handler (for all other text messages)
+    # ❌ MESSAGE HANDLER (This handles everything else)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     logging.info("✅ Petoy 2.0 is running on Groq with PERMANENT MEMORY and IMAGE GENERATION!")
