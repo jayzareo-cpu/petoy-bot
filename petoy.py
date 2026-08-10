@@ -12,7 +12,6 @@ logging.basicConfig(level=logging.INFO)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
-# Check if environment variables are set
 if not GEMINI_API_KEY:
     logging.error("❌ GEMINI_API_KEY is not set!")
     exit(1)
@@ -24,10 +23,10 @@ if not TELEGRAM_BOT_TOKEN:
 logging.info("✅ Environment variables loaded successfully.")
 
 # ============================================
-# GEMINI 1.5 FLASH — FAST & FREE
+# GEMINI 2.0 FLASH (Updated)
 # ============================================
 def ask_gemini(question):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
     data = {
         "contents": [{
@@ -64,7 +63,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    logging.info("✅ Petoy 2.0 is running on Gemini 1.5 Flash!")
+    logging.info("✅ Petoy 2.0 is running on Gemini 2.0 Flash!")
     app.run_polling()
 
 if __name__ == "__main__":
