@@ -23,10 +23,17 @@ if not TELEGRAM_BOT_TOKEN:
 
 logging.info("✅ Environment variables loaded successfully.")
 
+# ============================================
+# GEMINI 1.5 FLASH — FAST & FREE
+# ============================================
 def ask_gemini(question):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
-    data = {"contents": [{"parts": [{"text": question}]}]}
+    data = {
+        "contents": [{
+            "parts": [{"text": question}]
+        }]
+    }
     
     try:
         response = requests.post(url, headers=headers, json=data)
@@ -57,7 +64,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    logging.info("✅ Bot is running!")
+    logging.info("✅ Petoy 2.0 is running on Gemini 1.5 Flash!")
     app.run_polling()
 
 if __name__ == "__main__":
