@@ -2,6 +2,8 @@ import os
 import requests
 import json
 import logging
+import threading
+from flask import Flask
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
 
@@ -23,7 +25,19 @@ if not TELEGRAM_BOT_TOKEN:
 logging.info("✅ Environment variables loaded successfully.")
 
 # ============================================
-# GEMINI 2.0 FLASH (Updated)
+# FLASK SERVER (Keeps Render happy)
+# ============================================
+flask_app = Flask(__name__)
+
+@flask_app.route('/')
+def home():
+    return "🤖 Petoy 2.0 is running!"
+
+def run_flask():
+    flask_app.run(host="0.0.0.0", port=10000)
+
+# ============================================
+# GEMINI 2.0 FLASH
 # ============================================
 def ask_gemini(question):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={GEMINI_API_KEY}"
@@ -58,7 +72,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🤖 Hello! I'm Petoy 2.0. Send me anything!")
 
 def main():
+    # Start Flask server in a background thread
+    threading.Thread(target=run_flask, daemon=True).start()
     logging.info("🚀 Petoy 2.0 starting...")
+    
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
