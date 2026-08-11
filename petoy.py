@@ -20,7 +20,7 @@ logging.basicConfig(level=logging.INFO)
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 DATABASE_URL = os.environ.get("DATABASE_URL")
-AGNES_API_KEY = os.environ.get("AGNES_API_KEY")
+HUGGINGFACE_API_KEY = os.environ.get("HUGGINGFACE_API_KEY")
 
 if not all([GROQ_API_KEY, TELEGRAM_BOT_TOKEN, DATABASE_URL]):
     logging.error("❌ Missing environment variables!")
@@ -402,74 +402,40 @@ def search_wikipedia(query):
         return f"❌ Could not reach Wikipedia"
 
 # ============================================
-# 🎬 VIDEO GENERATION (Agnes AI — 5 Minute Timeout)
+# 🎬 VIDEO GENERATION (Hugging Face)
 # ============================================
-def create_video_task(prompt):
-    if not AGNES_API_KEY:
-        logging.error("❌ AGNES_API_KEY is not set!")
+def generate_hf_video(prompt):
+    """Generate video using Hugging Face CogVideoX-2b"""
+    if not HUGGINGFACE_API_KEY:
+        logging.error("❌ HUGGINGFACE_API_KEY is not set!")
         return None
     
-    url = "https://apihub.agnes-ai.com/v1/videos"
-    headers = {
-        "Authorization": f"Bearer {AGNES_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    
-    payload = {
-        "prompt": prompt,
-        "model": "agnes-video-v2.0",
-        "aspect_ratio": "16:9",
-        "duration": 5,
-        "frames": 60,
-    }
+    url = "https://api-inference.huggingface.co/models/THUDM/CogVideoX-2b"
+    headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
+    payload = {"inputs": prompt}
     
     try:
-        logging.info(f"📡 Sending video request: {prompt[:50]}...")
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
-        logging.info(f"📡 Response status: {response.status_code}")
-        logging.info(f"📡 Response body: {response.text[:300]}")
+        logging.info(f"🎬 Sending video request to Hugging Face: {prompt[:50]}...")
+        response = requests.post(url, headers=headers, json=payload, timeout=180)
         
-        if response.status_code != 200:
-            logging.error(f"❌ API error: {response.status_code}")
+        if response.status_code == 200:
+            logging.info(f"✅ Video generated! Size: {len(response.content)} bytes")
+            return response.content
+        elif response.status_code == 503:
+            logging.warning("⏳ Model is loading. Try again in a few seconds.")
             return None
-            
-        data = response.json()
-        return data.get("video_id") or data.get("id")
+        else:
+            logging.error(f"❌ HF API error: {response.status_code} - {response.text[:200]}")
+            return None
     except Exception as e:
-        logging.error(f"❌ Video creation error: {e}")
+        logging.error(f"❌ HF video generation error: {e}")
         return None
-
-def poll_video_status(video_id):
-    """Poll video status for up to 5 minutes"""
-    url = "https://apihub.agnes-ai.com/agnesapi"
-    params = {"video_id": video_id}
-    headers = {"Authorization": f"Bearer {AGNES_API_KEY}"}
-    
-    for attempt in range(60):  # 60 attempts × 5 seconds = 5 minutes
-        try:
-            response = requests.get(url, headers=headers, params=params, timeout=10)
-            data = response.json()
-            status = str(data.get("status", "")).lower()
-            progress = data.get("progress", 0)
-            logging.info(f"📡 Poll {attempt+1}: status={status}, progress={progress}%")
-            
-            if status in {"succeeded", "success", "completed", "done"}:
-                video_url = data.get("video_url") or data.get("url")
-                if video_url:
-                    return {"success": True, "url": video_url}
-                return {"success": False, "error": "No video URL"}
-            if status in {"failed", "error", "cancelled"}:
-                return {"success": False, "error": data}
-        except Exception as e:
-            logging.error(f"❌ Poll error: {e}")
-        time.sleep(5)
-    
-    return {"success": False, "error": "Timed out after 5 minutes"}
 
 def generate_fallback_image(prompt):
+    """Fallback: generate image when video fails"""
     try:
         url = f"https://image.pollinations.ai/prompt/{prompt.replace(' ', '%20')}?width=512&height=512&nologo=true"
-        response = requests.get(url, timeout=15)
+        response = requests.get(url, timeout=30)
         if response.status_code == 200:
             return response.content
     except:
@@ -593,7 +559,7 @@ Your personality:
 - Time in cities, countdowns
 - Brainstorm, pros/cons, would you rather
 - Image generation and analysis
-- Video generation with fallback to images"""}
+- Video generation via Hugging Face CogVideoX-2b"""}
     ]
 
     history = get_history(user_id)
@@ -671,7 +637,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await analyze_image(update, context)
             return
 
-        # --- VIDEO GENERATION ---
+        # --- VIDEO GENERATION (Hugging Face) ---
         video_keywords = [
             r'make a video of (.+)',
             r'generate a video of (.+)',
@@ -691,46 +657,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if video_match:
             prompt = video_match.group(1).strip()
             
-            if not AGNES_API_KEY:
-                await update.message.reply_text("❌ Video API key not configured.")
+            if not HUGGINGFACE_API_KEY:
+                await update.message.reply_text("❌ Hugging Face API key not configured.")
                 return
             
             if not prompt:
                 await update.message.reply_text("⚠️ What kind of video do you want?")
                 return
             
-            await update.message.reply_text("🎬 Generating your video... this may take 1-3 minutes.")
+            await update.message.reply_text("🎬 Generating your video with Hugging Face... this may take 1-3 minutes.")
             
-            video_id = create_video_task(prompt)
-            if not video_id:
-                await update.message.reply_text("⚠️ Video generation failed. Try again.")
-                return
+            video_data = generate_hf_video(prompt)
             
-            result = poll_video_status(video_id)
-            
-            if result["success"] and result.get("url"):
-                video_url = result["url"]
-                
-                # Check if URL works
-                try:
-                    head_response = requests.head(video_url, timeout=5)
-                    if head_response.status_code != 200:
-                        await update.message.reply_text("❌ Video was generated but the URL is broken. Try again.")
-                        return
-                except:
-                    await update.message.reply_text("❌ Video URL is unreachable. Try again.")
-                    return
-                
-                await update.message.reply_video(video_url, caption=f"🎥 Here's your video: {prompt}")
+            if video_data:
+                await update.message.reply_video(
+                    video=video_data,
+                    caption=f"🎥 Here's your video: {prompt}",
+                    supports_streaming=True
+                )
             else:
-                await update.message.reply_text(f"❌ Video generation failed: {result.get('error', 'Unknown error')}")
-                # Fallback to image
+                # Fallback: generate image
+                await update.message.reply_text("⚠️ Video generation failed. Generating an image instead...")
                 image_data = generate_fallback_image(prompt)
                 if image_data:
                     await update.message.reply_photo(
                         photo=image_data,
-                        caption=f"🖼️ Here's an image for: {prompt}\n(Video is temporarily unavailable)"
+                        caption=f"🖼️ Here's an image for: {prompt}"
                     )
+                else:
+                    await update.message.reply_text("❌ Could not generate video or image. Try again.")
             return
 
         # --- SEARCH ---
@@ -1059,14 +1014,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
-    logging.info("🚀 Petoy 2.0 starting...")
+    logging.info("🚀 Petoy 2.0 starting with Hugging Face video...")
 
     bot = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     bot.add_handler(CommandHandler("start", start))
     bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     bot.add_handler(MessageHandler(filters.PHOTO, handle_message))
 
-    logging.info("✅ Petoy 2.0 is running!")
+    logging.info("✅ Petoy 2.0 is running with Hugging Face video!")
     bot.run_polling()
 
 if __name__ == "__main__":
