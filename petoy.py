@@ -402,7 +402,7 @@ def search_wikipedia(query):
         return f"❌ Could not reach Wikipedia"
 
 # ============================================
-# 🎬 VIDEO GENERATION (Agnes AI with URL validation)
+# 🎬 VIDEO GENERATION (Agnes AI — 5 Minute Timeout)
 # ============================================
 def create_video_task(prompt):
     if not AGNES_API_KEY:
@@ -425,13 +425,10 @@ def create_video_task(prompt):
     
     try:
         logging.info(f"📡 Sending video request: {prompt[:50]}...")
-        response = requests.post(url, headers=headers, json=payload, timeout=15)
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
         logging.info(f"📡 Response status: {response.status_code}")
         logging.info(f"📡 Response body: {response.text[:300]}")
         
-        if response.status_code == 400:
-            logging.error(f"❌ Bad request: {response.text}")
-            return None
         if response.status_code != 200:
             logging.error(f"❌ API error: {response.status_code}")
             return None
@@ -443,15 +440,19 @@ def create_video_task(prompt):
         return None
 
 def poll_video_status(video_id):
+    """Poll video status for up to 5 minutes"""
     url = "https://apihub.agnes-ai.com/agnesapi"
     params = {"video_id": video_id}
     headers = {"Authorization": f"Bearer {AGNES_API_KEY}"}
     
-    for attempt in range(30):
+    for attempt in range(60):  # 60 attempts × 5 seconds = 5 minutes
         try:
             response = requests.get(url, headers=headers, params=params, timeout=10)
             data = response.json()
             status = str(data.get("status", "")).lower()
+            progress = data.get("progress", 0)
+            logging.info(f"📡 Poll {attempt+1}: status={status}, progress={progress}%")
+            
             if status in {"succeeded", "success", "completed", "done"}:
                 video_url = data.get("video_url") or data.get("url")
                 if video_url:
@@ -459,10 +460,11 @@ def poll_video_status(video_id):
                 return {"success": False, "error": "No video URL"}
             if status in {"failed", "error", "cancelled"}:
                 return {"success": False, "error": data}
-        except:
-            pass
-        time.sleep(3)
-    return {"success": False, "error": "Timed out"}
+        except Exception as e:
+            logging.error(f"❌ Poll error: {e}")
+        time.sleep(5)
+    
+    return {"success": False, "error": "Timed out after 5 minutes"}
 
 def generate_fallback_image(prompt):
     try:
@@ -697,7 +699,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("⚠️ What kind of video do you want?")
                 return
             
-            await update.message.reply_text("🎬 Generating your video... this may take 1-2 minutes.")
+            await update.message.reply_text("🎬 Generating your video... this may take 1-3 minutes.")
             
             video_id = create_video_task(prompt)
             if not video_id:
@@ -709,7 +711,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if result["success"] and result.get("url"):
                 video_url = result["url"]
                 
-                # --- CHECK IF URL WORKS ---
+                # Check if URL works
                 try:
                     head_response = requests.head(video_url, timeout=5)
                     if head_response.status_code != 200:
@@ -719,7 +721,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text("❌ Video URL is unreachable. Try again.")
                     return
                 
-                # --- SEND VIDEO ---
                 await update.message.reply_video(video_url, caption=f"🎥 Here's your video: {prompt}")
             else:
                 await update.message.reply_text(f"❌ Video generation failed: {result.get('error', 'Unknown error')}")
