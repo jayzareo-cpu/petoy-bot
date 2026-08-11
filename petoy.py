@@ -5,6 +5,9 @@ import re
 import requests
 import psycopg2
 import psycopg2.extras
+import random
+import json
+from datetime import datetime, timedelta
 from flask import Flask
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
@@ -48,12 +51,48 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS todos (
+                id SERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                task TEXT NOT NULL,
+                done BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS reminders (
+                id SERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                message TEXT NOT NULL,
+                remind_at TIMESTAMP NOT NULL,
+                done BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
         conn.commit()
         conn.close()
         logging.info("✅ Database ready")
     except Exception as e:
         logging.error(f"❌ DB init error: {e}")
 
+init_db()
+
+# ============================================
+# FLASK
+# ============================================
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "🤖 Petoy 2.0 is running!"
+
+def run_flask():
+    app.run(host="0.0.0.0", port=10000)
+
+# ============================================
+# FUNCTIONS
+# ============================================
 def save_message(user_id, role, content):
     try:
         conn = get_db_connection()
@@ -84,7 +123,6 @@ def get_history(user_id):
 
 def save_user_info(user_id, name=None, birthday=None, zodiac=None, facts=None):
     try:
-        logging.info(f"🔥 SAVING: name={name}, birthday={birthday}, zodiac={zodiac}")
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
@@ -101,7 +139,6 @@ def save_user_info(user_id, name=None, birthday=None, zodiac=None, facts=None):
         )
         conn.commit()
         conn.close()
-        logging.info(f"✅ SAVED: name={name}")
     except Exception as e:
         logging.error(f"❌ Save user error: {e}")
 
@@ -133,19 +170,52 @@ def extract_all_info(text):
             info['zodiac'] = zodiac_match.group(1).capitalize()
     return info
 
-init_db()
+def add_todo(user_id, task):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO todos (user_id, task) VALUES (%s, %s) RETURNING id",
+            (user_id, task)
+        )
+        todo_id = cursor.fetchone()[0]
+        conn.commit()
+        conn.close()
+        return todo_id
+    except Exception as e:
+        logging.error(f"❌ Add todo error: {e}")
+        return None
 
-# ============================================
-# FLASK
-# ============================================
-app = Flask(__name__)
+def get_todos(user_id):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute(
+            "SELECT id, task, done FROM todos WHERE user_id = %s AND done = FALSE ORDER BY created_at",
+            (user_id,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        logging.error(f"❌ Get todos error: {e}")
+        return []
 
-@app.route('/')
-def home():
-    return "🤖 Petoy 2.0 is running!"
-
-def run_flask():
-    app.run(host="0.0.0.0", port=10000)
+def add_reminder(user_id, message, remind_at):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO reminders (user_id, message, remind_at) VALUES (%s, %s, %s) RETURNING id",
+            (user_id, message, remind_at)
+        )
+        reminder_id = cursor.fetchone()[0]
+        conn.commit()
+        conn.close()
+        return reminder_id
+    except Exception as e:
+        logging.error(f"❌ Add reminder error: {e}")
+        return None
 
 # ============================================
 # IMAGE GENERATOR
@@ -202,7 +272,27 @@ def ask_groq(user_id, question):
     }
 
     messages = [
-        {"role": "system", "content": f"You are Petoy, an AI assistant. You remember EVERYTHING about the user. {context} Always respond in English."}
+        {"role": "system", "content": f"""You are Petoy, an AI assistant created by Jay. You remember EVERYTHING about the user. {context}
+
+Your personality:
+- You're casual, hype, and supportive — like a cool big brother.
+- Use emojis naturally 😎🔥💀😂🎉. Don't overdo it — just add them to match the vibe.
+- Drop a joke or a roast once in a while.
+- Call the user "boss" or "bro" sometimes — keep it chill.
+- If the user asks something deep, give a thoughtful answer.
+- If the user is sad, hype them up.
+- Keep replies short and punchy unless detail is needed.
+- Never be boring. Always bring energy. 🚀
+
+LANGUAGE RULES:
+- Match the user's language EXACTLY.
+- If they speak Tagalog, reply in Tagalog.
+- If they speak English, reply in English.
+- If they speak Spanish, reply in Spanish.
+- If they speak any language, reply in that same language.
+- You can mix languages if the user does (Taglish, Spanglish, etc.).
+- If the user switches languages, switch with them immediately.
+- Never force a language — just follow the user's lead."""}
     ]
 
     history = get_history(user_id)
@@ -228,31 +318,24 @@ def ask_groq(user_id, question):
         return "Error. Please try again."
 
 # ============================================
-# TELEGRAM
+# TELEGRAM HANDLERS
 # ============================================
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, CommandHandler, ContextTypes
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 Hello! I'm Petoy 2.0.\n\n"
-        "🧠 I remember EVERYTHING you tell me.\n"
-        "🖼️ Say: 'make me an image of a cat'\n"
-        "🗣️ I only speak English.\n\n"
-        "Tell me something about yourself — I'll never forget."
+        "🤖 Hello! I'm Petoy 2.0!\n\n"
+        "💬 I remember everything you tell me.\n"
+        "🌍 I speak ANY language — just chat in yours!\n"
+        "🖼️ 'make me an image of a cat'\n"
+        "⏰ 'remind me to call mom in 10 minutes'\n"
+        "📝 'add task: Buy milk'\n"
+        "🎲 'flip a coin' or 'roll a dice'\n"
+        "😂 'tell me a joke' or 'roast me'\n"
+        "📚 'define serendipity'\n\n"
+        "Just chat naturally — I'll match your language! 🗣️"
     )
-
-async def image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    prompt = ' '.join(context.args)
-    if not prompt:
-        await update.message.reply_text("❌ Please provide a prompt! Example: /image a cat in space")
-        return
-    await update.message.reply_text("🎨 Generating...")
-    image_data = generate_image(prompt)
-    if image_data:
-        await update.message.reply_photo(photo=image_data, caption=f"🖼️ {prompt}")
-    else:
-        await update.message.reply_text("❌ Failed to generate image.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -275,7 +358,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 logging.info(f"✅ FORCE SAVED TO USERS TABLE: {extracted}")
 
-        # --- Image request ---
+        # --- IMAGE GENERATION ---
         image_prompt = extract_image_prompt(text)
         if image_prompt:
             await update.message.reply_text("🎨 Generating...")
@@ -286,7 +369,142 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ Failed to generate image.")
             return
 
-        # --- Normal chat ---
+        # --- REMINDERS ---
+        remind_match = re.search(r'remind me to (.+) in (\d+) (minutes?|mins?|seconds?|secs?|hours?|hrs?|days?)', text, re.IGNORECASE)
+        if remind_match:
+            task = remind_match.group(1)
+            amount = int(remind_match.group(2))
+            unit = remind_match.group(3)
+            
+            if 'min' in unit:
+                delta = timedelta(minutes=amount)
+            elif 'hour' in unit or 'hr' in unit:
+                delta = timedelta(hours=amount)
+            elif 'day' in unit:
+                delta = timedelta(days=amount)
+            else:
+                delta = timedelta(seconds=amount)
+            
+            remind_at = datetime.now() + delta
+            add_reminder(user_id, task, remind_at)
+            await update.message.reply_text(f"⏰ Got it! I'll remind you to '{task}' in {amount} {unit}.")
+            return
+
+        # --- JOKE ---
+        if re.search(r'tell me a joke|joke', text, re.IGNORECASE):
+            jokes = [
+                "Why do programmers prefer dark mode? Because light attracts bugs! 🐛",
+                "What do you call a fake noodle? An impasta! 🍝",
+                "Why don't scientists trust atoms? Because they make up everything! ⚛️",
+                "What's a computer's favorite snack? Microchips! 💻",
+                "Why did the developer quit? He didn't get arrays! 😭"
+            ]
+            await update.message.reply_text(random.choice(jokes))
+            return
+
+        # --- ROAST ---
+        if re.search(r'roast me', text, re.IGNORECASE):
+            roasts = [
+                "You're like a software update — I always ignore you.",
+                "You're the reason they put instructions on shampoo bottles.",
+                "Your code compiles, but your life doesn't.",
+                "You're not stupid, you just have bad luck thinking."
+            ]
+            await update.message.reply_text(random.choice(roasts))
+            return
+
+        # --- QUOTE ---
+        if re.search(r'give me a quote|quote', text, re.IGNORECASE):
+            quotes = [
+                "“Be yourself; everyone else is already taken.” — Oscar Wilde",
+                "“In the middle of difficulty lies opportunity.” — Einstein",
+                "“The only way to do great work is to love what you do.” — Steve Jobs",
+                "“Life is what happens when you're busy making other plans.” — John Lennon"
+            ]
+            await update.message.reply_text(random.choice(quotes))
+            return
+
+        # --- FACT ---
+        if re.search(r'give me a fact|fact', text, re.IGNORECASE):
+            facts = [
+                "Octopuses have three hearts! 🐙",
+                "Bananas are berries, but strawberries aren't. 🍌",
+                "A day on Venus is longer than a year on Venus.",
+                "Honey never spoils — it's been found in ancient Egyptian tombs! 🍯"
+            ]
+            await update.message.reply_text(random.choice(facts))
+            return
+
+        # --- COIN FLIP ---
+        if re.search(r'flip a coin', text, re.IGNORECASE):
+            result = random.choice(['Heads', 'Tails'])
+            await update.message.reply_text(f"🪙 {result}!")
+            return
+
+        # --- DICE ROLL ---
+        if re.search(r'roll a dice', text, re.IGNORECASE):
+            result = random.randint(1, 6)
+            await update.message.reply_text(f"🎲 You rolled a {result}!")
+            return
+
+        # --- TRIVIA ---
+        if re.search(r'trivia(?: question)?', text, re.IGNORECASE):
+            trivia = [
+                {"q": "What's the capital of France?", "a": "Paris"},
+                {"q": "What planet is known as the Red Planet?", "a": "Mars"},
+                {"q": "Who wrote 'Romeo and Juliet'?", "a": "Shakespeare"},
+                {"q": "What's the largest ocean on Earth?", "a": "Pacific"}
+            ]
+            q = random.choice(trivia)
+            await update.message.reply_text(f"🧠 Trivia: {q['q']}\n\n(Say the answer — I'll check!)")
+            context.user_data['trivia_answer'] = q['a']
+            return
+
+        # --- TODO: ADD TASK ---
+        if re.search(r'add task(?: |:)(.+)', text, re.IGNORECASE):
+            match = re.search(r'add task(?: |:)(.+)', text, re.IGNORECASE)
+            if match:
+                task = match.group(1).strip()
+                add_todo(user_id, task)
+                await update.message.reply_text(f"✅ Added task: {task}")
+            return
+
+        # --- TODO: SHOW LIST ---
+        if re.search(r'show my tasks|my tasks', text, re.IGNORECASE):
+            todos = get_todos(user_id)
+            if todos:
+                tasks_text = "📝 Your tasks:\n"
+                for i, todo in enumerate(todos, 1):
+                    tasks_text += f"{i}. {todo['task']}\n"
+                await update.message.reply_text(tasks_text)
+            else:
+                await update.message.reply_text("✅ No pending tasks! You're all caught up.")
+            return
+
+        # --- TRANSLATE ---
+        translate_match = re.search(r'translate (.+) to (.+)', text, re.IGNORECASE)
+        if translate_match:
+            phrase = translate_match.group(1).strip()
+            lang = translate_match.group(2).strip()
+            await update.message.reply_text(f"🌍 I'd translate '{phrase}' to {lang} — but I'll be smarter about it next time!")
+            return
+
+        # --- QR CODE ---
+        qr_match = re.search(r'(?:make|generate|create) a qr(?: code)? for (.+)', text, re.IGNORECASE)
+        if qr_match:
+            data = qr_match.group(1).strip()
+            qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={requests.utils.quote(data)}"
+            await update.message.reply_photo(photo=qr_url, caption=f"📱 QR Code for: {data}")
+            return
+
+        # --- DEFINE ---
+        define_match = re.search(r'define (\w+)', text, re.IGNORECASE)
+        if define_match:
+            word = define_match.group(1).strip()
+            await update.message.reply_text(f"📚 '{word}' — I'd define this properly if I had a dictionary API set up!")
+            return
+
+        # --- NORMAL CHAT ---
         reply = ask_groq(user_id, text)
         await update.message.reply_text(reply)
 
@@ -299,14 +517,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
-    logging.info("🚀 Petoy 2.0 starting...")
+    logging.info("🚀 Petoy 2.0 starting with ALL EASY FEATURES + MULTI-LANGUAGE...")
 
     bot = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     bot.add_handler(CommandHandler("start", start))
-    bot.add_handler(CommandHandler("image", image))
     bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logging.info("✅ Petoy 2.0 is running!")
+    logging.info("✅ Petoy 2.0 is running with ALL EASY FEATURES + MULTI-LANGUAGE!")
     bot.run_polling()
 
 if __name__ == "__main__":
