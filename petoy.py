@@ -276,14 +276,12 @@ def delete_note(user_id, note_id):
         return False
 
 # ============================================
-# 🔍 SEARCH ENGINE — 20+ SOURCES
+# 🔍 SEARCH ENGINE
 # ============================================
 def search_web(query):
-    """Search 20+ sources without API keys"""
     results = []
     query_encoded = query.replace(' ', '+')
     
-    # 1. DuckDuckGo
     try:
         url = f"https://api.duckduckgo.com/?q={query}&format=json&no_html=1&skip_disambig=1"
         r = requests.get(url, timeout=6)
@@ -297,7 +295,6 @@ def search_web(query):
     except:
         pass
 
-    # 2. Wikipedia
     try:
         url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{query.replace(' ', '_')}"
         r = requests.get(url, timeout=6)
@@ -307,21 +304,6 @@ def search_web(query):
     except:
         pass
 
-    # 3. Wiktionary
-    try:
-        url = f"https://en.wiktionary.org/api/rest_v1/page/definition/{query.replace(' ', '_')}"
-        r = requests.get(url, timeout=6)
-        if r.status_code == 200:
-            data = r.json()
-            if data.get("en"):
-                for definition in data["en"]:
-                    if definition.get("definitions"):
-                        results.append(f"📖 Wiktionary: {definition['definitions'][0]['definition'][:300]}")
-                        break
-    except:
-        pass
-
-    # 4. GitHub
     try:
         url = f"https://api.github.com/search/repositories?q={query}&per_page=2"
         r = requests.get(url, timeout=6, headers={"User-Agent": "PetoyBot"})
@@ -333,7 +315,6 @@ def search_web(query):
     except:
         pass
 
-    # 5. Reddit
     try:
         url = f"https://www.reddit.com/r/all/search.json?q={query}&limit=2"
         r = requests.get(url, timeout=6, headers={"User-Agent": "PetoyBot"})
@@ -347,7 +328,6 @@ def search_web(query):
     except:
         pass
 
-    # 6. Stack Overflow
     try:
         url = f"https://api.stackexchange.com/2.3/search?order=desc&sort=relevance&intitle={query}&site=stackoverflow&pagesize=2"
         r = requests.get(url, timeout=6)
@@ -358,7 +338,6 @@ def search_web(query):
     except:
         pass
 
-    # 7. YouTube
     try:
         url = f"https://www.youtube.com/results?search_query={query_encoded}"
         r = requests.get(url, timeout=6)
@@ -368,7 +347,6 @@ def search_web(query):
     except:
         pass
 
-    # 8. BBC News
     try:
         url = "https://feeds.bbci.co.uk/news/rss.xml"
         r = requests.get(url, timeout=5)
@@ -380,7 +358,6 @@ def search_web(query):
     except:
         pass
 
-    # 9. NY Times
     try:
         url = "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml"
         r = requests.get(url, timeout=5)
@@ -392,7 +369,6 @@ def search_web(query):
     except:
         pass
 
-    # 10. Urban Dictionary
     try:
         url = f"https://api.urbandictionary.com/v0/define?term={query}"
         r = requests.get(url, timeout=6)
@@ -403,149 +379,16 @@ def search_web(query):
     except:
         pass
 
-    # 11. Thesaurus
-    try:
-        url = f"https://www.thesaurus.com/browse/{query.replace(' ', '%20')}"
-        r = requests.get(url, timeout=6)
-        synonyms = re.findall(r'<a class="css-1kg1xv8" href="[^"]*">([^<]+)</a>', r.text)[:3]
-        if synonyms:
-            results.append(f"🔤 Thesaurus: {', '.join(synonyms)}")
-    except:
-        pass
-
-    # 12. Quotable (Quotes)
-    try:
-        url = f"https://api.quotable.io/search/phrases?query={query}"
-        r = requests.get(url, timeout=6)
-        data = r.json()
-        for result in data.get("results", [])[:2]:
-            results.append(f"💬 Quote: \"{result.get('content', '')[:200]}\"")
-    except:
-        pass
-
-    # 13. Dictionary API
-    try:
-        url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{query}"
-        r = requests.get(url, timeout=6)
-        data = r.json()
-        if isinstance(data, list) and data:
-            definition = data[0].get("meanings", [{}])[0].get("definitions", [{}])[0].get("definition", "")
-            if definition:
-                results.append(f"📚 Dictionary: {definition[:300]}")
-    except:
-        pass
-
-    # 14. IMDb
-    try:
-        url = f"https://v2.sg.media-imdb.com/suggestion/{query[0]}/{query}.json"
-        r = requests.get(url, timeout=6)
-        data = r.json()
-        for item in data.get("d", [])[:2]:
-            results.append(f"🎬 IMDb: {item.get('l', 'Unknown')} ({item.get('y', 'N/A')})")
-    except:
-        pass
-
-    # 15. Twitter/X via Nitter
-    try:
-        url = f"https://nitter.poast.org/search?q={query}"
-        r = requests.get(url, timeout=6)
-        tweets = re.findall(r'<div class="tweet-content media-body">(.*?)</div>', r.text)[:2]
-        for tweet in tweets:
-            results.append(f"🐦 Twitter: {tweet[:200]}")
-    except:
-        pass
-
-    # 16. Google News
-    try:
-        url = f"https://news.google.com/rss/search?q={query_encoded}"
-        r = requests.get(url, timeout=6)
-        root = ET.fromstring(r.text)
-        for item in root.findall(".//item")[:2]:
-            title = item.find("title").text if item.find("title") is not None else ""
-            results.append(f"📰 Google News: {title[:200]}")
-    except:
-        pass
-
-    # 17. Product Hunt
-    try:
-        url = f"https://www.producthunt.com/search?q={query}"
-        r = requests.get(url, timeout=6)
-        products = re.findall(r'<a[^>]*class="[^"]*product-card[^"]*"[^>]*>(.*?)</a>', r.text)[:2]
-        for product in products:
-            results.append(f"🚀 Product Hunt: {product[:200]}")
-    except:
-        pass
-
-    # 18. Dev.to
-    try:
-        url = f"https://dev.to/search?q={query}"
-        r = requests.get(url, timeout=6)
-        articles = re.findall(r'<h3[^>]*>(.*?)</h3>', r.text)[:2]
-        for article in articles:
-            results.append(f"📝 Dev.to: {article[:200]}")
-    except:
-        pass
-
-    # 19. Hacker News
-    try:
-        url = "https://news.ycombinator.com/rss"
-        r = requests.get(url, timeout=5)
-        root = ET.fromstring(r.text)
-        for item in root.findall(".//item")[:5]:
-            title = item.find("title").text if item.find("title") is not None else ""
-            if query.lower() in title.lower():
-                results.append(f"📰 Hacker News: {title[:200]}")
-    except:
-        pass
-
-    # 20. Unsplash
-    try:
-        url = f"https://unsplash.com/napi/search/photos?query={query}&per_page=2"
-        r = requests.get(url, timeout=6)
-        data = r.json()
-        for photo in data.get("results", []):
-            desc = photo.get('description', 'No description')
-            results.append(f"📷 Unsplash: {desc[:200]}")
-    except:
-        pass
-
-    # 21. Genius (Lyrics)
-    try:
-        url = f"https://genius.com/search?q={query}"
-        r = requests.get(url, timeout=6)
-        titles = re.findall(r'<span class="highlighted">(.*?)</span>', r.text)[:2]
-        for title in titles:
-            results.append(f"🎤 Genius: {title[:200]}")
-    except:
-        pass
-
-    # 22. Spotify (via search)
-    try:
-        url = f"https://open.spotify.com/search/{query_encoded}"
-        r = requests.get(url, timeout=6)
-        songs = re.findall(r'<span class="Type__TypeElement-sc-gj6m8l-0[^"]*"[^>]*>(.*?)</span>', r.text)[:2]
-        for song in songs:
-            results.append(f"🎵 Spotify: {song[:200]}")
-    except:
-        pass
-
     if not results:
-        fallback = [
-            f"🔍 No results found for '{query}'. Try being more specific or check the spelling.",
-            f"🤔 Couldn't find anything for '{query}'. Try a different search term.",
-            f"📭 No results for '{query}'. Search for a person, place, or thing."
-        ]
-        return random.choice(fallback)
-
-    # Remove duplicates
+        return f"🔍 No results found for '{query}'. Try being more specific."
+    
     seen = set()
     unique_results = []
     for result in results:
         if result[:50] not in seen:
             seen.add(result[:50])
             unique_results.append(result)
-
-    return "\n\n".join(unique_results[:8])
+    return "\n\n".join(unique_results[:6])
 
 def search_wikipedia(query):
     try:
@@ -556,17 +399,14 @@ def search_wikipedia(query):
             return f"📚 Wikipedia: {data['extract'][:800]}"
         return f"❌ No Wikipedia page found for '{query}'"
     except:
-        return f"❌ Could not reach Wikipedia for '{query}'"
-
-def search_web_full(query):
-    return search_web(query)
+        return f"❌ Could not reach Wikipedia"
 
 # ============================================
-# 🎬 VIDEO GENERATION (Agnes AI)
+# 🎬 VIDEO GENERATION
 # ============================================
 def create_video_task(prompt):
-    """Create a video generation task and return the video_id."""
     if not AGNES_API_KEY:
+        logging.error("❌ AGNES_API_KEY is not set!")
         return None
     
     url = "https://apihub.agnes-ai.com/v1/videos"
@@ -583,7 +423,10 @@ def create_video_task(prompt):
         "frame_rate": 24,
     }
     try:
+        logging.info(f"📡 Sending video request: {prompt[:50]}...")
         response = requests.post(url, headers=headers, json=payload, timeout=30)
+        if response.status_code != 200:
+            return None
         data = response.json()
         return data.get("video_id") or data.get("id")
     except Exception as e:
@@ -591,10 +434,6 @@ def create_video_task(prompt):
         return None
 
 def poll_video_status(video_id):
-    """Poll the video status until completed or failed."""
-    if not AGNES_API_KEY:
-        return {"success": False, "error": "No API key"}
-    
     url = "https://apihub.agnes-ai.com/agnesapi"
     params = {"video_id": video_id}
     headers = {"Authorization": f"Bearer {AGNES_API_KEY}"}
@@ -604,18 +443,15 @@ def poll_video_status(video_id):
             response = requests.get(url, headers=headers, params=params, timeout=10)
             data = response.json()
             status = str(data.get("status", "")).lower()
-            
             if status in {"succeeded", "success", "completed", "done"}:
                 video_url = data.get("video_url") or data.get("url")
                 return {"success": True, "url": video_url}
             if status in {"failed", "error", "cancelled"}:
                 return {"success": False, "error": data}
-        except Exception as e:
-            logging.error(f"❌ Poll error: {e}")
-        
+        except:
+            pass
         time.sleep(5)
-    
-    return {"success": False, "error": "Timed out waiting for video."}
+    return {"success": False, "error": "Timed out"}
 
 # ============================================
 # IMAGE GENERATOR
@@ -724,16 +560,18 @@ Your personality:
 🌍 LANGUAGE RULES:
 - Match the user's language EXACTLY.
 
+📌 REMEMBER:
+- If the user says they don't want to talk about something, NEVER bring it up again.
+- If the user says "stop talking about X", respect that immediately.
+
 🔍 FEATURES:
-- Search 20+ sources: DuckDuckGo, Wikipedia, GitHub, Reddit, YouTube, News, and more
+- Search 20+ sources
 - Save and recall notes
 - Math solver, unit converter
 - Time in cities, countdowns
 - Brainstorm, pros/cons, would you rather
-- Palindrome check, reverse text
 - Image generation and analysis
 - Video generation via Agnes AI"""}
-
     ]
 
     history = get_history(user_id)
@@ -759,6 +597,25 @@ Your personality:
         return "Error. Please try again."
 
 # ============================================
+# EXTRACT INFO
+# ============================================
+def extract_all_info(text):
+    info = {}
+    name_match = re.search(r'my name is (\w+)', text, re.IGNORECASE)
+    if name_match:
+        info['name'] = name_match.group(1)
+    birthday_match = re.search(r'my birthday is (\w+ \d+)', text, re.IGNORECASE)
+    if birthday_match:
+        info['birthday'] = birthday_match.group(1)
+    zodiac_match = re.search(r'i\'?m a (\w+)', text, re.IGNORECASE)
+    if zodiac_match:
+        zodiacs = ['pisces', 'aries', 'taurus', 'gemini', 'cancer', 'leo', 'virgo',
+                   'libra', 'scorpio', 'sagittarius', 'capricorn', 'aquarius']
+        if zodiac_match.group(1).lower() in zodiacs:
+            info['zodiac'] = zodiac_match.group(1).capitalize()
+    return info
+
+# ============================================
 # TELEGRAM HANDLERS
 # ============================================
 from telegram import Update
@@ -767,9 +624,7 @@ from telegram.ext import Application, MessageHandler, filters, CommandHandler, C
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 Hello! I'm Petoy 2.0!\n\n"
-        "🔍 **Search ANYTHING:**\n"
-        "• 'search for Elon Musk'\n"
-        "• 'search Wikipedia for AI'\n\n"
+        "🔍 **Search:** 'search for Elon Musk'\n"
         "📝 **Notes:** 'save note: meeting at 3pm'\n"
         "🧮 **Math:** 'solve 2+2'\n"
         "📏 **Convert:** 'convert 10 km to miles'\n"
@@ -794,10 +649,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await analyze_image(update, context)
             return
 
-        # --- VIDEO GENERATION ---
-        if re.search(r'make a video of (.+)', text, re.IGNORECASE):
-            match = re.search(r'make a video of (.+)', text, re.IGNORECASE)
-            prompt = match.group(1).strip()
+        # --- VIDEO GENERATION (Expanded Triggers) ---
+        video_keywords = [
+            r'make a video of (.+)',
+            r'generate a video of (.+)',
+            r'create a video of (.+)',
+            r'video of (.+)',
+            r'make me a video of (.+)',
+            r'generate me a video of (.+)',
+            r'create me a video of (.+)'
+        ]
+        
+        video_match = None
+        for pattern in video_keywords:
+            video_match = re.search(pattern, text, re.IGNORECASE)
+            if video_match:
+                break
+        
+        if video_match:
+            prompt = video_match.group(1).strip()
             
             if not AGNES_API_KEY:
                 await update.message.reply_text("❌ Video API key not configured. Add AGNES_API_KEY to environment.")
@@ -826,12 +696,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if re.search(r'search for (.+)', text, re.IGNORECASE):
             match = re.search(r'search for (.+)', text, re.IGNORECASE)
             query = match.group(1).strip()
-            await update.message.reply_text(f"🔍 Searching 20+ sources for '{query}'...")
+            await update.message.reply_text(f"🔍 Searching for '{query}'...")
             result = search_web(query)
             await update.message.reply_text(result[:4000])
             return
 
-        # --- SEARCH: Wikipedia ---
         if re.search(r'search wikipedia for (.+)', text, re.IGNORECASE):
             match = re.search(r'search wikipedia for (.+)', text, re.IGNORECASE)
             query = match.group(1).strip()
@@ -840,7 +709,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(result[:1000])
             return
 
-        # --- NOTES: SAVE ---
+        # --- NOTES ---
         if re.search(r'save note(?: |:)(.+)', text, re.IGNORECASE):
             match = re.search(r'save note(?: |:)(.+)', text, re.IGNORECASE)
             content = match.group(1).strip()
@@ -849,7 +718,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"✅ Note saved: '{title}'")
             return
 
-        # --- NOTES: RECALL ---
         if re.search(r'recall note(?: |:)(.+)', text, re.IGNORECASE):
             match = re.search(r'recall note(?: |:)(.+)', text, re.IGNORECASE)
             query = match.group(1).strip()
@@ -861,7 +729,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"❌ No note found for '{query}'")
             return
 
-        # --- NOTES: SHOW ALL ---
         if re.search(r'show notes', text, re.IGNORECASE):
             notes = get_notes(user_id)
             if notes:
@@ -873,7 +740,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("📝 No notes saved yet.")
             return
 
-        # --- NOTES: DELETE ---
         if re.search(r'delete note(?: |:)(.+)', text, re.IGNORECASE):
             match = re.search(r'delete note(?: |:)(.+)', text, re.IGNORECASE)
             title = match.group(1).strip()
@@ -885,7 +751,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"❌ No note found for '{title}'")
             return
 
-        # --- MATH SOLVER ---
+        # --- MATH ---
         if re.search(r'solve (.+)', text, re.IGNORECASE):
             match = re.search(r'solve (.+)', text, re.IGNORECASE)
             expr = match.group(1).strip()
@@ -896,7 +762,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ Could not solve that. Try: 2 + 2")
             return
 
-        # --- UNIT CONVERTER ---
+        # --- CONVERT ---
         if re.search(r'convert (\d+\.?\d*) (\w+) to (\w+)', text, re.IGNORECASE):
             match = re.search(r'convert (\d+\.?\d*) (\w+) to (\w+)', text, re.IGNORECASE)
             value = float(match.group(1))
@@ -913,10 +779,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 result = value * conversions[key]
                 await update.message.reply_text(f"🔄 {value} {from_unit} = {result:.2f} {to_unit}")
             else:
-                await update.message.reply_text("❌ Conversion not supported. Try: km to miles, kg to lbs")
+                await update.message.reply_text("❌ Conversion not supported")
             return
 
-        # --- TIME IN CITY ---
+        # --- TIME ---
         if re.search(r'time in (\w+)', text, re.IGNORECASE):
             match = re.search(r'time in (\w+)', text, re.IGNORECASE)
             city = match.group(1).strip()
@@ -924,34 +790,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'tokyo': 9, 'new york': -5, 'london': 0, 'manila': 8,
                 'sydney': 11, 'dubai': 4, 'singapore': 8, 'paris': 1,
                 'berlin': 1, 'rome': 1, 'los angeles': -8, 'chicago': -6,
-                'houston': -6, 'phoenix': -7, 'philadelphia': -5,
-                'san antonio': -6, 'san diego': -8, 'dallas': -6,
-                'san jose': -8, 'austin': -6, 'jacksonville': -5,
-                'fort worth': -6, 'columbus': -5, 'charlotte': -5,
-                'san francisco': -8, 'indianapolis': -5, 'seattle': -8,
-                'denver': -7, 'washington': -5, 'boston': -5,
-                'el paso': -7, 'nashville': -6, 'detroit': -5,
-                'oklahoma city': -6, 'portland': -8, 'las vegas': -8,
-                'memphis': -6, 'louisville': -5, 'baltimore': -5,
-                'milwaukee': -6, 'albuquerque': -7, 'tucson': -7,
-                'fresno': -8, 'sacramento': -8, 'miami': -5,
-                'atlanta': -5, 'cairo': 2, 'capetown': 2,
-                'lagos': 1, 'nairobi': 3, 'addis ababa': 3,
-                'casablanca': 1, 'tunis': 1, 'algiers': 1,
-                'tripoli': 2, 'khartoum': 2, 'accra': 0,
-                'dakar': 0, 'bamako': 0, 'ouagadougou': 0,
-                'niamey': 1, "n'djamena": 1, 'bangui': 1,
-                'brazzaville': 1, 'kinshasa': 1, 'libreville': 1,
-                'malabo': 1, 'yaounde': 1, 'abuja': 1,
-                'lome': 0, 'cotonou': 1, 'porto-novo': 1,
-                'lilongwe': 2, 'harare': 2, 'gaborone': 2,
-                'windhoek': 2, 'luanda': 1, 'maputo': 2,
-                'antananarivo': 3, 'port louis': 4, 'victoria': 4,
-                'moroni': 3, 'djibouti': 3, 'asmera': 3,
-                'mogadishu': 3, 'kampala': 3, 'kigali': 2,
-                'bujumbura': 2, 'dar es salaam': 3, 'zanzibar': 3,
-                'dodoma': 3, 'lusaka': 2, 'blantyre': 2,
-                'mbabane': 2, 'maseru': 2
             }
             city_lower = city.lower()
             if city_lower in timezones:
@@ -960,7 +798,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 local_time = utc_now + timedelta(hours=offset)
                 await update.message.reply_text(f"🕐 Time in {city.title()}: {local_time.strftime('%I:%M %p')}")
             else:
-                await update.message.reply_text(f"❌ I don't have timezone info for {city}. Try: Tokyo, New York, London, Manila")
+                await update.message.reply_text(f"❌ No timezone info for {city}")
             return
 
         # --- COUNTDOWN ---
@@ -997,24 +835,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("\n".join(ideas))
             return
 
-        # --- PROS AND CONS ---
+        # --- PROS & CONS ---
         if re.search(r'pros and cons of (.+)', text, re.IGNORECASE):
             match = re.search(r'pros and cons of (.+)', text, re.IGNORECASE)
             topic = match.group(1).strip()
-            pros = [
-                f"✅ Easy to start",
-                f"✅ Low cost",
-                f"✅ High demand",
-                f"✅ Scalable",
-                f"✅ Fun to work on",
-            ]
-            cons = [
-                f"❌ Takes time",
-                f"❌ Requires learning",
-                f"❌ Competition",
-                f"❌ Need patience",
-                f"❌ Not guaranteed success",
-            ]
+            pros = ["✅ Easy to start", "✅ Low cost", "✅ High demand", "✅ Scalable", "✅ Fun to work on"]
+            cons = ["❌ Takes time", "❌ Requires learning", "❌ Competition", "❌ Need patience", "❌ Not guaranteed success"]
             await update.message.reply_text(f"📊 **Pros and Cons of {topic}**\n\nPros:\n" + "\n".join(pros) + "\n\nCons:\n" + "\n".join(cons))
             return
 
@@ -1037,7 +863,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"✅ '{word}' is a palindrome!" if is_pal else f"❌ '{word}' is not a palindrome.")
             return
 
-        # --- REVERSE TEXT ---
+        # --- REVERSE ---
         if re.search(r'reverse(?: |:)(.+)', text, re.IGNORECASE):
             match = re.search(r'reverse(?: |:)(.+)', text, re.IGNORECASE)
             word = match.group(1).strip()
@@ -1159,7 +985,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['trivia_answer'] = q['a']
             return
 
-        # --- TODO: ADD TASK ---
+        # --- TODO ---
         if re.search(r'add task(?: |:)(.+)', text, re.IGNORECASE):
             match = re.search(r'add task(?: |:)(.+)', text, re.IGNORECASE)
             if match:
@@ -1168,7 +994,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"✅ Added task: {task}")
             return
 
-        # --- TODO: SHOW LIST ---
         if re.search(r'show my tasks|my tasks', text, re.IGNORECASE):
             todos = get_todos(user_id)
             if todos:
@@ -1193,14 +1018,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
-    logging.info("🚀 Petoy 2.0 starting with VIDEO GENERATION...")
+    logging.info("🚀 Petoy 2.0 starting...")
 
     bot = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     bot.add_handler(CommandHandler("start", start))
     bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     bot.add_handler(MessageHandler(filters.PHOTO, handle_message))
 
-    logging.info("✅ Petoy 2.0 is running with VIDEO GENERATION!")
+    logging.info("✅ Petoy 2.0 is running!")
     bot.run_polling()
 
 if __name__ == "__main__":
