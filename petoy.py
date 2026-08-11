@@ -260,7 +260,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = update.message.text
         logging.info(f"📩 {user_id}: {text}")
 
-        # --- FORCE SAVE: Auto-save any personal info ---
+        # --- FORCE SAVE TO USERS TABLE ---
         personal_keywords = ['my name', 'birthday', 'i\'m', 'favorite', 'pet', 'age', 'years old']
         if any(keyword in text.lower() for keyword in personal_keywords):
             extracted = extract_all_info(text)
@@ -273,6 +273,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     zodiac=extracted.get('zodiac') or current.get('zodiac'),
                     facts=text
                 )
+                logging.info(f"✅ FORCE SAVED TO USERS TABLE: {extracted}")
 
         # --- Image request ---
         image_prompt = extract_image_prompt(text)
