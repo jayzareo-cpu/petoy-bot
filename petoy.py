@@ -20,7 +20,7 @@ if not all([GROQ_API_KEY, TELEGRAM_BOT_TOKEN, DATABASE_URL]):
     exit(1)
 
 # ============================================
-# DATABASE
+# PERMANENT DATABASE
 # ============================================
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL, sslmode='require')
@@ -38,9 +38,16 @@ def init_db():
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                user_id TEXT PRIMARY KEY,
+                name TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
         conn.commit()
         conn.close()
-        logging.info("✅ Database connected")
+        logging.info("✅ Permanent database ready")
     except Exception as e:
         logging.error(f"❌ DB init error: {e}")
 
@@ -54,6 +61,7 @@ def save_message(user_id, role, content):
         )
         conn.commit()
         conn.close()
+        logging.info(f"💾 Message saved")
     except Exception as e:
         logging.error(f"❌ Save error: {e}")
 
@@ -62,7 +70,7 @@ def get_history(user_id):
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute(
-            "SELECT role, content FROM messages WHERE user_id = %s ORDER BY id LIMIT 15",
+            "SELECT role, content FROM messages WHERE user_id = %s ORDER BY id LIMIT 20",
             (user_id,)
         )
         rows = cursor.fetchall()
@@ -71,6 +79,32 @@ def get_history(user_id):
     except Exception as e:
         logging.error(f"❌ History error: {e}")
         return []
+
+def save_user_name(user_id, name):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO users (user_id, name) VALUES (%s, %s) ON CONFLICT (user_id) DO UPDATE SET name = EXCLUDED.name",
+            (user_id, name)
+        )
+        conn.commit()
+        conn.close()
+        logging.info(f"✅ Permanent name saved: {name}")
+    except Exception as e:
+        logging.error(f"❌ Save name error: {e}")
+
+def get_user_name(user_id):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("SELECT name FROM users WHERE user_id = %s", (user_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return row["name"] if row else None
+    except Exception as e:
+        logging.error(f"❌ Get name error: {e}")
+        return None
 
 init_db()
 
@@ -87,7 +121,7 @@ def run_flask():
     app.run(host="0.0.0.0", port=10000)
 
 # ============================================
-# IMAGE GENERATION (Pollinations)
+# IMAGE GENERATOR
 # ============================================
 def generate_image(prompt):
     enhanced_prompt = f"{prompt}, high quality, detailed, 4k"
@@ -117,9 +151,12 @@ def extract_image_prompt(text):
     return None
 
 # ============================================
-# GROQ AI (English Only)
+# GROQ AI (Permanent Memory)
 # ============================================
 def ask_groq(user_id, question):
+    user_name = get_user_name(user_id)
+    name_context = f"The user's name is {user_name}." if user_name else "The user hasn't told me their name yet."
+
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
@@ -127,7 +164,7 @@ def ask_groq(user_id, question):
     }
     
     messages = [
-        {"role": "system", "content": "You are Petoy, an AI assistant created by Jay. You remember everything. ALWAYS respond in English. Never use Filipino/Tagalog."}
+        {"role": "system", "content": f"You are Petoy, created by Jay. {name_context} Always respond in English. Never use Filipino/Tagalog."}
     ]
     
     history = get_history(user_id)
@@ -160,8 +197,8 @@ from telegram.ext import Application, MessageHandler, filters, CommandHandler, C
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 Hello! I'm Petoy 2.0.\n\n"
-        "💬 I remember everything you tell me.\n"
+        "🤖 Hello! I'm Petoy 2.0 — permanent memory, permanent you.\n\n"
+        "💬 Tell me your name and I'll remember it forever.\n"
         "🖼️ Send: 'make me an image of a cat'\n"
         "🗣️ I only speak English.\n\n"
         "How can I help you today?"
@@ -172,17 +209,12 @@ async def image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not prompt:
         await update.message.reply_text("❌ Please provide a prompt! Example: /image a cat in space")
         return
-    
-    await update.message.reply_text("🎨 Generating your image...")
+    await update.message.reply_text("🎨 Generating...")
     image_data = generate_image(prompt)
-    
     if image_data:
-        await update.message.reply_photo(
-            photo=image_data,
-            caption=f"🖼️ Here's your image: {prompt}"
-        )
+        await update.message.reply_photo(photo=image_data, caption=f"🖼️ {prompt}")
     else:
-        await update.message.reply_text("❌ Sorry, I couldn't generate that image. Please try a different prompt.")
+        await update.message.reply_text("❌ Failed to generate image.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -190,24 +222,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = update.message.text
         logging.info(f"📩 {user_id}: {text}")
         
-        # Check for image request
+        # Detect name
+        name_match = re.search(r'my name is (\w+)', text, re.IGNORECASE)
+        if name_match:
+            name = name_match.group(1)
+            save_user_name(user_id, name)
+            await update.message.reply_text(f"✅ Got it! I'll remember your name is {name}.")
+            return
+        
+        # Detect image
         image_prompt = extract_image_prompt(text)
         if image_prompt:
-            await update.message.reply_text("🎨 Generating your image...")
+            await update.message.reply_text("🎨 Generating...")
             image_data = generate_image(image_prompt)
             if image_data:
-                await update.message.reply_photo(
-                    photo=image_data,
-                    caption=f"🖼️ Here's your image: {image_prompt}"
-                )
+                await update.message.reply_photo(photo=image_data, caption=f"🖼️ {image_prompt}")
             else:
-                await update.message.reply_text("❌ Sorry, I couldn't generate that image. Please try a different prompt.")
+                await update.message.reply_text("❌ Failed to generate image.")
             return
         
         # Normal chat
         reply = ask_groq(user_id, text)
         await update.message.reply_text(reply)
-        
     except Exception as e:
         logging.error(f"❌ Error: {e}")
         await update.message.reply_text("Error. Please try again.")
