@@ -402,7 +402,7 @@ def search_wikipedia(query):
         return f"❌ Could not reach Wikipedia"
 
 # ============================================
-# 🎬 VIDEO GENERATION (Agnes AI — Fixed Payload)
+# 🎬 VIDEO GENERATION (Agnes AI with URL validation)
 # ============================================
 def create_video_task(prompt):
     if not AGNES_API_KEY:
@@ -456,6 +456,7 @@ def poll_video_status(video_id):
                 video_url = data.get("video_url") or data.get("url")
                 if video_url:
                     return {"success": True, "url": video_url}
+                return {"success": False, "error": "No video URL"}
             if status in {"failed", "error", "cancelled"}:
                 return {"success": False, "error": data}
         except:
@@ -590,8 +591,7 @@ Your personality:
 - Time in cities, countdowns
 - Brainstorm, pros/cons, would you rather
 - Image generation and analysis
-- Video generation (Agnes AI) with fallback to images"""}
-
+- Video generation with fallback to images"""}
     ]
 
     history = get_history(user_id)
@@ -690,34 +690,40 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             prompt = video_match.group(1).strip()
             
             if not AGNES_API_KEY:
-                await update.message.reply_text("❌ Video API key not configured. Add AGNES_API_KEY to environment.")
+                await update.message.reply_text("❌ Video API key not configured.")
                 return
             
             if not prompt:
-                await update.message.reply_text("⚠️ What kind of video do you want? Example: 'make a video of a cat walking'")
+                await update.message.reply_text("⚠️ What kind of video do you want?")
                 return
             
             await update.message.reply_text("🎬 Generating your video... this may take 1-2 minutes.")
             
             video_id = create_video_task(prompt)
             if not video_id:
-                await update.message.reply_text("⚠️ Video API is busy. Generating an image instead...")
-                image_data = generate_fallback_image(prompt)
-                if image_data:
-                    await update.message.reply_photo(
-                        photo=image_data, 
-                        caption=f"🖼️ Here's an image for: {prompt}\n(Video generation is currently unavailable)"
-                    )
-                else:
-                    await update.message.reply_text("❌ Video generation failed. Try again later.")
+                await update.message.reply_text("⚠️ Video generation failed. Try again.")
                 return
             
             result = poll_video_status(video_id)
             
             if result["success"] and result.get("url"):
-                await update.message.reply_video(result["url"], caption=f"🎥 Here's your video: {prompt}")
+                video_url = result["url"]
+                
+                # --- CHECK IF URL WORKS ---
+                try:
+                    head_response = requests.head(video_url, timeout=5)
+                    if head_response.status_code != 200:
+                        await update.message.reply_text("❌ Video was generated but the URL is broken. Try again.")
+                        return
+                except:
+                    await update.message.reply_text("❌ Video URL is unreachable. Try again.")
+                    return
+                
+                # --- SEND VIDEO ---
+                await update.message.reply_video(video_url, caption=f"🎥 Here's your video: {prompt}")
             else:
                 await update.message.reply_text(f"❌ Video generation failed: {result.get('error', 'Unknown error')}")
+                # Fallback to image
                 image_data = generate_fallback_image(prompt)
                 if image_data:
                     await update.message.reply_photo(
