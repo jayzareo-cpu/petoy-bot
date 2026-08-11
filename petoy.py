@@ -402,7 +402,7 @@ def search_wikipedia(query):
         return f"❌ Could not reach Wikipedia"
 
 # ============================================
-# 🎬 VIDEO GENERATION (Agnes AI + Fallback)
+# 🎬 VIDEO GENERATION (Agnes AI — Fixed Payload)
 # ============================================
 def create_video_task(prompt):
     if not AGNES_API_KEY:
@@ -414,31 +414,30 @@ def create_video_task(prompt):
         "Authorization": f"Bearer {AGNES_API_KEY}",
         "Content-Type": "application/json"
     }
+    
     payload = {
-        "model": "agnes-video-v2.0",
         "prompt": prompt,
-        "width": 1152,
-        "height": 768,
-        "num_frames": 61,
-        "frame_rate": 24,
+        "model": "agnes-video-v2.0",
+        "aspect_ratio": "16:9",
+        "duration": 5,
+        "frames": 60,
     }
+    
     try:
         logging.info(f"📡 Sending video request: {prompt[:50]}...")
         response = requests.post(url, headers=headers, json=payload, timeout=15)
-        if response.status_code == 401:
-            logging.error("❌ Invalid AGNES_API_KEY")
-            return None
-        if response.status_code == 429:
-            logging.error("❌ Rate limited by Agnes API")
+        logging.info(f"📡 Response status: {response.status_code}")
+        logging.info(f"📡 Response body: {response.text[:300]}")
+        
+        if response.status_code == 400:
+            logging.error(f"❌ Bad request: {response.text}")
             return None
         if response.status_code != 200:
             logging.error(f"❌ API error: {response.status_code}")
             return None
+            
         data = response.json()
         return data.get("video_id") or data.get("id")
-    except requests.exceptions.Timeout:
-        logging.error("❌ Video API timeout")
-        return None
     except Exception as e:
         logging.error(f"❌ Video creation error: {e}")
         return None
@@ -448,8 +447,7 @@ def poll_video_status(video_id):
     params = {"video_id": video_id}
     headers = {"Authorization": f"Bearer {AGNES_API_KEY}"}
     
-    start_time = time.time()
-    for attempt in range(20):
+    for attempt in range(30):
         try:
             response = requests.get(url, headers=headers, params=params, timeout=10)
             data = response.json()
@@ -458,15 +456,12 @@ def poll_video_status(video_id):
                 video_url = data.get("video_url") or data.get("url")
                 if video_url:
                     return {"success": True, "url": video_url}
-                return {"success": False, "error": "No video URL returned"}
             if status in {"failed", "error", "cancelled"}:
-                return {"success": False, "error": data.get("error", "Video generation failed")}
-            if time.time() - start_time > 120:
-                return {"success": False, "error": "Generation timed out"}
-        except Exception as e:
-            logging.error(f"❌ Poll error: {e}")
-        time.sleep(5)
-    return {"success": False, "error": "Timed out after 2 minutes"}
+                return {"success": False, "error": data}
+        except:
+            pass
+        time.sleep(3)
+    return {"success": False, "error": "Timed out"}
 
 def generate_fallback_image(prompt):
     try:
@@ -587,7 +582,6 @@ Your personality:
 
 📌 REMEMBER:
 - If the user says they don't want to talk about something, NEVER bring it up again.
-- If the user says "stop talking about X", respect that immediately.
 
 🔍 FEATURES:
 - Search 20+ sources
@@ -596,7 +590,7 @@ Your personality:
 - Time in cities, countdowns
 - Brainstorm, pros/cons, would you rather
 - Image generation and analysis
-- Video generation via Agnes AI"""}
+- Video generation (Agnes AI) with fallback to images"""}
 
     ]
 
@@ -675,7 +669,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await analyze_image(update, context)
             return
 
-        # --- VIDEO GENERATION (Expanded Triggers + Fallback) ---
+        # --- VIDEO GENERATION ---
         video_keywords = [
             r'make a video of (.+)',
             r'generate a video of (.+)',
