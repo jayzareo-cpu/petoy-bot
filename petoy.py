@@ -1,10 +1,3 @@
-"""
-Petoy 2.0 — Telegram Bot with ACE Self-Learning
-Created by Jay
-
-ACE = Agentic Context Engine — learns from every conversation
-"""
-
 import os
 import logging
 import threading
@@ -21,12 +14,6 @@ from flask import Flask
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
 
-# ============================================
-# ACE Self-Learning Framework
-# ============================================
-from ace import ACELiteLLM
-
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -42,17 +29,7 @@ if not all([GROQ_API_KEY, TELEGRAM_BOT_TOKEN, DATABASE_URL]):
     exit(1)
 
 # ============================================
-# ACE Self-Learning Agent
-# ============================================
-petoy_agent = ACELiteLLM(
-    model="groq/llama-3.1-8b-instant",
-    skillbook_path="petoy_skills.json"
-)
-
-logger.info("✅ ACE self-learning agent initialized!")
-
-# ============================================
-# DATABASE SETUP
+# DATABASE
 # ============================================
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL, sslmode='require')
@@ -114,6 +91,15 @@ def init_db():
             )
         ''')
         
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS blocked_topics (
+                id SERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                topic TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
         conn.commit()
         conn.close()
         logger.info("✅ Database ready")
@@ -121,6 +107,60 @@ def init_db():
         logger.error(f"❌ DB init error: {e}")
 
 init_db()
+
+# ============================================
+# BLOCKED TOPICS
+# ============================================
+def block_topic(user_id, topic):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO blocked_topics (user_id, topic) VALUES (%s, %s)",
+            (user_id, topic.lower())
+        )
+        conn.commit()
+        conn.close()
+        logger.info(f"🚫 Blocked topic '{topic}' for user {user_id}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Block topic error: {e}")
+        return False
+
+def get_blocked_topics(user_id):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute(
+            "SELECT topic FROM blocked_topics WHERE user_id = %s",
+            (user_id,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [row["topic"] for row in rows]
+    except Exception as e:
+        logger.error(f"❌ Get blocked topics error: {e}")
+        return []
+
+def is_topic_blocked(user_id, text):
+    blocked = get_blocked_topics(user_id)
+    text_lower = text.lower()
+    for topic in blocked:
+        if topic in text_lower:
+            return True
+    return False
+
+# ============================================
+# FLASK
+# ============================================
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "🤖 Petoy 2.0 is running!"
+
+def run_flask():
+    app.run(host="0.0.0.0", port=10000)
 
 # ============================================
 # DATABASE FUNCTIONS
@@ -295,18 +335,6 @@ def delete_note(user_id, note_id):
         return False
 
 # ============================================
-# FLASK SERVER
-# ============================================
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "🤖 Petoy 2.0 is running with ACE self-learning!"
-
-def run_flask():
-    app.run(host="0.0.0.0", port=10000)
-
-# ============================================
 # SEARCH ENGINE
 # ============================================
 def search_web(query):
@@ -476,7 +504,6 @@ async def analyze_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         image_base64 = base64.b64encode(response.content).decode('utf-8')
         caption = update.message.caption if update.message.caption else ""
-        
         if "solve" in caption.lower() or "answer" in caption.lower() or "homework" in caption.lower():
             task = "SOLVE the problems in this image. Give only the answers in a numbered list."
         elif "describe" in caption.lower() or "explain" in caption.lower():
@@ -485,7 +512,6 @@ async def analyze_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             task = "Read and extract ALL text from this image."
         else:
             task = "Analyze this image. If it's homework or math, solve it. If it's a photo, describe it briefly."
-        
         await update.message.reply_text("🔍 Analyzing...")
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
@@ -506,13 +532,12 @@ async def analyze_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Could not analyze the image.")
 
 # ============================================
-# GROQ AI WITH ACE SELF-LEARNING
+# GROQ AI WITH BLOCKED TOPICS
 # ============================================
 def ask_groq(user_id, question):
-    """
-    Petoy's brain — now with self-learning via ACE!
-    ACE learns from every interaction and gets smarter over time.
-    """
+    if is_topic_blocked(user_id, question):
+        return "🔇 I'm not allowed to talk about that, boss. You told me to stop."
+
     user_info = get_user_info(user_id)
     context = ""
     if user_info:
@@ -525,26 +550,65 @@ def ask_groq(user_id, question):
         if user_info.get("facts"):
             context += f"Additional facts: {user_info['facts']}. "
     
+    blocked = get_blocked_topics(user_id)
+    if blocked:
+        context += f"Blocked topics: {', '.join(blocked)}. Never mention these again."
+
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    messages = [
+        {"role": "system", "content": f"""You are Petoy, an AI assistant created by Jay. You remember EVERYTHING about the user. {context}
+
+Your personality:
+- You're casual, hype, and supportive.
+- Use emojis naturally 😎🔥💀😂🎉.
+- Call the user "boss" or "bro" sometimes.
+- Keep replies short and punchy.
+
+🚫 IMPORTANT: NEVER bring up blocked topics. If the user mentioned a blocked topic, they're testing you. Just say "I'm not allowed to talk about that."
+
+🌍 LANGUAGE RULES:
+- Match the user's language EXACTLY.
+
+🔍 FEATURES:
+- Search 20+ sources
+- Save and recall notes
+- To-do list and reminders
+- Math solver and unit converter
+- Time in cities and countdowns
+- Brainstorm and pros/cons
+- Would you rather, palindrome check, reverse text
+- Image generation and analysis"""}
+    ]
+
+    history = get_history(user_id)
+    messages.extend(history)
+    messages.append({"role": "user", "content": question})
+
+    payload = {
+        "model": "llama-3.1-8b-instant",
+        "messages": messages,
+        "temperature": 0.7,
+        "max_tokens": 500
+    }
+
     try:
-        # ACE learns from every question
-        answer = petoy_agent.ask(question)
-        
-        # Save to database
+        response = requests.post(url, headers=headers, json=payload)
+        data = response.json()
+        reply = data["choices"][0]["message"]["content"]
         save_message(user_id, "user", question)
-        save_message(user_id, "assistant", answer)
-        
-        # Save ACE's learned skills periodically
-        if random.randint(1, 10) == 1:
-            petoy_agent.save_skillbook("petoy_skills.json")
-            logger.info("💾 ACE skillbook saved!")
-        
-        return answer
+        save_message(user_id, "assistant", reply)
+        return reply
     except Exception as e:
-        logger.error(f"❌ ACE error: {e}")
+        logger.error(f"❌ Groq error: {e}")
         return "Error. Please try again."
 
 # ============================================
-# EXTRACT USER INFO
+# EXTRACT INFO
 # ============================================
 def extract_all_info(text):
     info = {}
@@ -571,17 +635,15 @@ from telegram.ext import Application, MessageHandler, filters, CommandHandler, C
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🧠 **Petoy 2.0 — Self-Learning AI**\n\n"
-        "🤖 I learn from every conversation! The more we talk, the smarter I get.\n\n"
+        "🤖 I learn from my mistakes! If I bring up something you don't like, say:\n"
+        "🚫 **'stop talking about [topic]'**\n"
+        "I'll remember and never mention it again.\n\n"
         "🔍 **Search:** 'search for Elon Musk'\n"
         "📝 **Notes:** 'save note: meeting at 3pm'\n"
         "🧮 **Math:** 'solve 2+2'\n"
-        "🕐 **Time:** 'time in Tokyo'\n"
-        "⏳ **Countdown:** 'countdown to December 25'\n"
-        "💡 **Brainstorm:** 'brainstorm: startup ideas'\n"
         "🖼️ **Image:** 'make me an image of a cat'\n"
         "📸 **Send a photo** and I'll analyze it!\n\n"
-        "🌍 I speak ANY language!\n"
-        "🧠 I learn from every interaction!"
+        "🌍 I speak ANY language!"
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -590,6 +652,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = update.message.text if update.message.text else ""
         caption = update.message.caption if update.message.caption else ""
         logger.info(f"📩 {user_id}: {text or caption}")
+
+        # --- BLOCK TOPIC ---
+        if re.search(r'stop talking about (.+)', text, re.IGNORECASE):
+            match = re.search(r'stop talking about (.+)', text, re.IGNORECASE)
+            topic = match.group(1).strip().lower()
+            block_topic(user_id, topic)
+            await update.message.reply_text(f"✅ Got it, boss. I'll never mention '{topic}' again. 🔇")
+            return
 
         # --- IMAGE ANALYSIS ---
         if update.message.photo:
@@ -922,14 +992,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
-    logger.info("🚀 Petoy 2.0 starting with ACE self-learning...")
+    logger.info("🚀 Petoy 2.0 starting with BLOCKED TOPICS...")
 
     bot = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     bot.add_handler(CommandHandler("start", start))
     bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     bot.add_handler(MessageHandler(filters.PHOTO, handle_message))
 
-    logger.info("✅ Petoy 2.0 is running with ACE self-learning!")
+    logger.info("✅ Petoy 2.0 is running with BLOCKED TOPICS!")
     bot.run_polling()
 
 if __name__ == "__main__":
