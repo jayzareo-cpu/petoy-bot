@@ -249,43 +249,36 @@ def extract_image_prompt(text):
     return None
 
 # ============================================
-# IMAGE ANALYSIS (Vision)
+# IMAGE ANALYSIS (Vision) — Latest Free Model
 # ============================================
 async def analyze_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Analyze an image sent by the user"""
     try:
-        # Get the image file from the user
-        photo = update.message.photo[-1]  # Get the highest quality image
+        photo = update.message.photo[-1]
         file = await photo.get_file()
         file_path = file.file_path
         
-        # Download the image
         response = requests.get(file_path)
         if response.status_code != 200:
             await update.message.reply_text("❌ Could not download image.")
             return
         
-        # Convert image to base64
         image_base64 = base64.b64encode(response.content).decode('utf-8')
-        
-        # Ask user for a question about the image
         await update.message.reply_text("🔍 I'm analyzing the image...")
         
-        # Use Groq's vision model (LLaVA)
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {GROQ_API_KEY}",
             "Content-Type": "application/json"
         }
         
-        # Get the user's question (or use default)
         if context.args:
             question = ' '.join(context.args)
         else:
             question = "What's in this image? Describe it in detail."
         
         payload = {
-            "model": "llava-v1.5-7b-4096-preview",  # Vision model
+            "model": "qwen/qwen3.6-27b",  # ✅ Latest, free, working vision model
             "messages": [
                 {
                     "role": "user",
