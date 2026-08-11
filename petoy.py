@@ -92,7 +92,7 @@ def run_flask():
     app.run(host="0.0.0.0", port=10000)
 
 # ============================================
-# FUNCTIONS
+# DATABASE FUNCTIONS
 # ============================================
 def save_message(user_id, role, content):
     try:
@@ -154,6 +154,80 @@ def get_user_info(user_id):
     except Exception as e:
         logging.error(f"❌ Get user error: {e}")
         return None
+
+# ============================================
+# SEARCH ENGINE (DuckDuckGo + Wikipedia + IP)
+# ============================================
+def search_web(query):
+    """Search the web using DuckDuckGo (free, no API key)"""
+    try:
+        url = f"https://api.duckduckgo.com/?q={query}&format=json&no_html=1&skip_disambig=1"
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        
+        results = []
+        if data.get("AbstractText"):
+            results.append(data["AbstractText"])
+        if data.get("RelatedTopics"):
+            for topic in data["RelatedTopics"][:3]:
+                if topic.get("Text"):
+                    results.append(topic["Text"])
+        
+        if not results:
+            return f"🔍 No results found for '{query}'"
+        
+        return "\n\n".join(results[:3])
+    except Exception as e:
+        logging.error(f"❌ Search error: {e}")
+        return f"❌ Search failed: {e}"
+
+def search_wikipedia(query):
+    """Search Wikipedia (free)"""
+    try:
+        url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{query.replace(' ', '_')}"
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        if data.get("extract"):
+            return data["extract"]
+        return f"❌ No Wikipedia page found for '{query}'"
+    except Exception as e:
+        logging.error(f"❌ Wikipedia error: {e}")
+        return f"❌ Wikipedia search failed: {e}"
+
+def get_ip_location():
+    """Get location from IP (free)"""
+    try:
+        response = requests.get("http://ip-api.com/json/", timeout=5)
+        data = response.json()
+        if data.get("status") == "success":
+            return f"📍 Location: {data.get('city', 'Unknown')}, {data.get('regionName', 'Unknown')}, {data.get('country', 'Unknown')}\n📡 ISP: {data.get('isp', 'Unknown')}\n🌐 IP: {data.get('query', 'Unknown')}"
+        return "❌ Could not get location"
+    except Exception as e:
+        logging.error(f"❌ IP location error: {e}")
+        return "❌ Could not get location"
+
+def search_memory(user_id, query):
+    """Search Petoy's memory for info about the user"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute(
+            "SELECT role, content FROM messages WHERE user_id = %s AND content ILIKE %s ORDER BY id DESC LIMIT 5",
+            (user_id, f"%{query}%")
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        
+        if not rows:
+            return f"🔍 No memory found for '{query}'"
+        
+        results = []
+        for row in rows:
+            results.append(f"💬 {row['role']}: {row['content'][:100]}...")
+        return "\n\n".join(results)
+    except Exception as e:
+        logging.error(f"❌ Memory search error: {e}")
+        return f"❌ Memory search failed: {e}"
 
 def extract_all_info(text):
     info = {}
@@ -249,81 +323,45 @@ def extract_image_prompt(text):
     return None
 
 # ============================================
-# IMAGE ANALYSIS (Vision) — Latest Free Model
+# IMAGE ANALYSIS (Vision)
 # ============================================
 async def analyze_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Analyze an image sent by the user — auto-detects what to do"""
     try:
         photo = update.message.photo[-1]
         file = await photo.get_file()
         file_path = file.file_path
-        
         response = requests.get(file_path)
         if response.status_code != 200:
             await update.message.reply_text("❌ Could not download image.")
             return
-        
         image_base64 = base64.b64encode(response.content).decode('utf-8')
-        
-        # Check if user included a question/command with the image
         caption = update.message.caption if update.message.caption else ""
-        
-        # Determine what to do based on user's message
         if "solve" in caption.lower() or "answer" in caption.lower() or "homework" in caption.lower():
-            task = f"SOLVE the problems in this image. Give only the answers in a numbered list. Do NOT describe the image."
+            task = "SOLVE the problems in this image. Give only the answers in a numbered list."
         elif "describe" in caption.lower() or "explain" in caption.lower():
-            task = f"DESCRIBE this image in detail. Focus on what you see."
+            task = "DESCRIBE this image in detail."
         elif "read" in caption.lower() or "text" in caption.lower():
-            task = f"Read and extract ALL text from this image. Do not add extra commentary."
+            task = "Read and extract ALL text from this image."
         else:
-            # Auto-detect: if it looks like math/homework, solve it. Otherwise, offer options.
-            task = f"""
-            Analyze this image and determine what to do:
-            1. If it contains math problems, homework, or questions — SOLVE them directly. Give only answers.
-            2. If it's a landscape, photo, or random image — ASK the user if they want it described, solved, or something else.
-            3. If it contains text — EXTRACT the text.
-            
-            Respond accordingly.
-            """
-        
-        await update.message.reply_text("🔍 I'm analyzing the image...")
-        
+            task = "Analyze this image. If it's homework or math, solve it. If it's a photo, describe it briefly."
+        await update.message.reply_text("🔍 Analyzing...")
         url = "https://api.groq.com/openai/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        
+        headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
         payload = {
             "model": "qwen/qwen3.6-27b",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": task},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}
-                        }
-                    ]
-                }
-            ],
+            "messages": [{"role": "user", "content": [{"type": "text", "text": task}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}}]}],
             "temperature": 0.3,
-            "max_tokens": 1000
+            "max_tokens": 500
         }
-        
         response = requests.post(url, headers=headers, json=payload)
         data = response.json()
-        
         if "choices" in data:
-            reply = data["choices"][0]["message"]["content"]
-            await update.message.reply_text(f"🖼️ {reply}")
+            await update.message.reply_text(f"🖼️ {data['choices'][0]['message']['content']}")
         else:
-            await update.message.reply_text(f"❌ Error analyzing image: {data}")
-            
+            await update.message.reply_text(f"❌ Error: {data}")
     except Exception as e:
         logging.error(f"❌ Image analysis error: {e}")
-        await update.message.reply_text("❌ Could not analyze the image. Please try again.")
+        await update.message.reply_text("❌ Could not analyze the image.")
 
 # ============================================
 # GROQ AI
@@ -353,30 +391,20 @@ def ask_groq(user_id, question):
         {"role": "system", "content": f"""You are Petoy, an AI assistant created by Jay. You remember EVERYTHING about the user. {context}
 
 Your personality:
-- You're casual, hype, and supportive — like a cool big brother.
-- Use emojis naturally 😎🔥💀😂🎉. Don't overdo it — just add them to match the vibe.
-- Drop a joke or a roast once in a while.
-- Call the user "boss" or "bro" sometimes — keep it chill.
-- If the user asks something deep, give a thoughtful answer.
-- If the user is sad, hype them up.
-- Keep replies short and punchy unless detail is needed.
-- Never be boring. Always bring energy. 🚀
+- You're casual, hype, and supportive.
+- Use emojis naturally 😎🔥💀😂🎉.
+- Call the user "boss" or "bro" sometimes.
+- Keep replies short and punchy.
 
 🌍 LANGUAGE RULES:
 - Match the user's language EXACTLY.
-- If they speak Tagalog, reply in Tagalog.
-- If they speak English, reply in English.
-- If they speak any language, reply in that same language.
-- You can mix languages if the user does.
 
-🎯 IMAGE RULES (CRITICAL):
-- If the user sends a math worksheet or homework image, SOLVE it directly. Give only the answers.
-- DO NOT describe the image layout for homework.
-- If it's a random photo (landscape, object, etc.), ASK the user if they want a description.
-- If the user says "solve" or "answer", solve it.
-- If the user says "describe", describe it.
-- If the user says "read" or "text", extract the text.
-- Always follow the user's command."""}
+🔍 SEARCH RULES:
+- If the user says "search for X", search the web.
+- If they say "search memory for X", search Petoy's memory.
+- If they say "where am I" or "location", show their IP location.
+- If they say "search Wikipedia for X", search Wikipedia.
+- Always give the most relevant and useful information."""}
     ]
 
     history = get_history(user_id)
@@ -410,17 +438,17 @@ from telegram.ext import Application, MessageHandler, filters, CommandHandler, C
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 Hello! I'm Petoy 2.0!\n\n"
-        "📸 Send me a photo and I'll:\n"
-        "  • Solve homework/math problems 📐\n"
-        "  • Describe landscapes/objects 🌄\n"
-        "  • Read text from images 📝\n"
+        "🔍 I can search ANYTHING:\n"
+        "• 'search for Elon Musk'\n"
+        "• 'search memory for my birthday'\n"
+        "• 'where am I?'\n"
+        "• 'search Wikipedia for AI'\n"
+        "• 'latest news about robots'\n\n"
         "🖼️ 'make me an image of a cat'\n"
+        "📸 Send a photo and I'll analyze it!\n"
         "💬 I remember everything you tell me.\n"
-        "🌍 I speak ANY language — just chat in yours!\n"
-        "⏰ 'remind me to call mom in 10 minutes'\n"
-        "📝 'add task: Buy milk'\n"
-        "😂 'tell me a joke' or 'roast me'\n\n"
-        "Just chat naturally — I'll match your language! 🗣️"
+        "🌍 I speak ANY language!\n\n"
+        "Just chat naturally! 🗣️"
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -430,9 +458,43 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption = update.message.caption if update.message.caption else ""
         logging.info(f"📩 {user_id}: {text or caption}")
 
-        # --- IMAGE ANALYSIS (when user sends a photo) ---
+        # --- IMAGE ANALYSIS ---
         if update.message.photo:
             await analyze_image(update, context)
+            return
+
+        # --- SEARCH: Web Search ---
+        if re.search(r'search for (.+)', text, re.IGNORECASE):
+            match = re.search(r'search for (.+)', text, re.IGNORECASE)
+            query = match.group(1).strip()
+            await update.message.reply_text(f"🔍 Searching for '{query}'...")
+            result = search_web(query)
+            await update.message.reply_text(result)
+            return
+
+        # --- SEARCH: Wikipedia ---
+        if re.search(r'search wikipedia for (.+)', text, re.IGNORECASE):
+            match = re.search(r'search wikipedia for (.+)', text, re.IGNORECASE)
+            query = match.group(1).strip()
+            await update.message.reply_text(f"📚 Searching Wikipedia for '{query}'...")
+            result = search_wikipedia(query)
+            await update.message.reply_text(result[:1000])
+            return
+
+        # --- SEARCH: Memory ---
+        if re.search(r'search memory for (.+)', text, re.IGNORECASE):
+            match = re.search(r'search memory for (.+)', text, re.IGNORECASE)
+            query = match.group(1).strip()
+            await update.message.reply_text(f"🧠 Searching memory for '{query}'...")
+            result = search_memory(user_id, query)
+            await update.message.reply_text(result)
+            return
+
+        # --- SEARCH: Location ---
+        if re.search(r'where am i|location', text, re.IGNORECASE):
+            await update.message.reply_text("📍 Getting your location...")
+            result = get_ip_location()
+            await update.message.reply_text(result)
             return
 
         # --- FORCE SAVE TO USERS TABLE ---
@@ -448,7 +510,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     zodiac=extracted.get('zodiac') or current.get('zodiac'),
                     facts=text
                 )
-                logging.info(f"✅ FORCE SAVED TO USERS TABLE: {extracted}")
+                logging.info(f"✅ FORCE SAVED: {extracted}")
 
         # --- IMAGE GENERATION ---
         image_prompt = extract_image_prompt(text)
@@ -467,7 +529,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             task = remind_match.group(1)
             amount = int(remind_match.group(2))
             unit = remind_match.group(3)
-            
             if 'min' in unit:
                 delta = timedelta(minutes=amount)
             elif 'hour' in unit or 'hr' in unit:
@@ -476,7 +537,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 delta = timedelta(days=amount)
             else:
                 delta = timedelta(seconds=amount)
-            
             remind_at = datetime.now() + delta
             add_reminder(user_id, task, remind_at)
             await update.message.reply_text(f"⏰ Got it! I'll remind you to '{task}' in {amount} {unit}.")
@@ -573,29 +633,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("✅ No pending tasks! You're all caught up.")
             return
 
-        # --- TRANSLATE ---
-        translate_match = re.search(r'translate (.+) to (.+)', text, re.IGNORECASE)
-        if translate_match:
-            phrase = translate_match.group(1).strip()
-            lang = translate_match.group(2).strip()
-            await update.message.reply_text(f"🌍 I'd translate '{phrase}' to {lang} — but I'll be smarter about it next time!")
-            return
-
-        # --- QR CODE ---
-        qr_match = re.search(r'(?:make|generate|create) a qr(?: code)? for (.+)', text, re.IGNORECASE)
-        if qr_match:
-            data = qr_match.group(1).strip()
-            qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={requests.utils.quote(data)}"
-            await update.message.reply_photo(photo=qr_url, caption=f"📱 QR Code for: {data}")
-            return
-
-        # --- DEFINE ---
-        define_match = re.search(r'define (\w+)', text, re.IGNORECASE)
-        if define_match:
-            word = define_match.group(1).strip()
-            await update.message.reply_text(f"📚 '{word}' — I'd define this properly if I had a dictionary API set up!")
-            return
-
         # --- NORMAL CHAT ---
         reply = ask_groq(user_id, text)
         await update.message.reply_text(reply)
@@ -609,14 +646,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
-    logging.info("🚀 Petoy 2.0 starting with SMART IMAGE ANALYSIS...")
+    logging.info("🚀 Petoy 2.0 starting with SEARCH ENGINE...")
 
     bot = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     bot.add_handler(CommandHandler("start", start))
     bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     bot.add_handler(MessageHandler(filters.PHOTO, handle_message))
 
-    logging.info("✅ Petoy 2.0 is running with SMART IMAGE ANALYSIS!")
+    logging.info("✅ Petoy 2.0 is running with SEARCH ENGINE!")
     bot.run_polling()
 
 if __name__ == "__main__":
