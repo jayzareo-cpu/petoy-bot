@@ -20,7 +20,7 @@ if not all([GROQ_API_KEY, TELEGRAM_BOT_TOKEN, DATABASE_URL]):
     exit(1)
 
 # ============================================
-# DATABASE
+# DATABASE (Supabase)
 # ============================================
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL, sslmode='require')
@@ -64,9 +64,9 @@ def save_message(user_id, role, content):
         )
         conn.commit()
         conn.close()
-        logging.info(f"💾 Message saved")
+        logging.info(f"💾 Message saved for {user_id}")
     except Exception as e:
-        logging.error(f"❌ Save error: {e}")
+        logging.error(f"❌ Save message error: {e}")
 
 def get_history(user_id):
     try:
@@ -101,7 +101,7 @@ def save_user_info(user_id, name=None, birthday=None, zodiac=None, facts=None):
         )
         conn.commit()
         conn.close()
-        logging.info(f"✅ Saved: name={name}, birthday={birthday}, zodiac={zodiac}")
+        logging.info(f"✅ Saved user: name={name}, birthday={birthday}, zodiac={zodiac}")
     except Exception as e:
         logging.error(f"❌ Save user error: {e}")
 
@@ -118,23 +118,27 @@ def get_user_info(user_id):
         return None
 
 def extract_all_info(text):
-    """Extract name, birthday, zodiac, and facts from any text"""
+    """Extract name, birthday, zodiac, and any other facts from the text."""
     info = {}
-    
+
     name_match = re.search(r'my name is (\w+)', text, re.IGNORECASE)
     if name_match:
         info['name'] = name_match.group(1)
-    
+
     birthday_match = re.search(r'my birthday is (\w+ \d+)', text, re.IGNORECASE)
     if not birthday_match:
         birthday_match = re.search(r'birthday is (\w+ \d+)', text, re.IGNORECASE)
     if birthday_match:
         info['birthday'] = birthday_match.group(1)
-    
+
     zodiac_match = re.search(r'i\'?m a (\w+)', text, re.IGNORECASE)
-    if zodiac_match and zodiac_match.group(1).lower() in ['pisces', 'aries', 'taurus', 'gemini', 'cancer', 'leo', 'virgo', 'libra', 'scorpio', 'sagittarius', 'capricorn', 'aquarius']:
-        info['zodiac'] = zodiac_match.group(1).capitalize()
-    
+    if zodiac_match:
+        possible_zodiac = zodiac_match.group(1).lower()
+        zodiacs = ['pisces', 'aries', 'taurus', 'gemini', 'cancer', 'leo', 'virgo',
+                   'libra', 'scorpio', 'sagittarius', 'capricorn', 'aquarius']
+        if possible_zodiac in zodiacs:
+            info['zodiac'] = possible_zodiac.capitalize()
+
     return info
 
 init_db()
@@ -186,7 +190,7 @@ def extract_image_prompt(text):
 # ============================================
 def ask_groq(user_id, question):
     user_info = get_user_info(user_id)
-    
+
     context = ""
     if user_info:
         if user_info.get("name"):
@@ -197,31 +201,30 @@ def ask_groq(user_id, question):
             context += f"Their zodiac sign is {user_info['zodiac']}. "
         if user_info.get("facts"):
             context += f"Additional facts: {user_info['facts']}. "
-    
-    if not context:
+    else:
         context = "The user hasn't shared any personal info yet."
-    
+
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
-    
+
     messages = [
         {"role": "system", "content": f"You are Petoy, an AI assistant. You remember EVERYTHING about the user. {context} Always respond in English."}
     ]
-    
+
     history = get_history(user_id)
     messages.extend(history)
     messages.append({"role": "user", "content": question})
-    
+
     payload = {
         "model": "llama-3.1-8b-instant",
         "messages": messages,
         "temperature": 0.7,
         "max_tokens": 500
     }
-    
+
     try:
         response = requests.post(url, headers=headers, json=payload)
         data = response.json()
@@ -234,7 +237,7 @@ def ask_groq(user_id, question):
         return "Error. Please try again."
 
 # ============================================
-# TELEGRAM
+# TELEGRAM HANDLERS
 # ============================================
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, CommandHandler, ContextTypes
@@ -265,8 +268,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = str(update.message.from_user.id)
         text = update.message.text
         logging.info(f"📩 {user_id}: {text}")
-        
-        # Detect image
+
+        # --- Image request ---
         image_prompt = extract_image_prompt(text)
         if image_prompt:
             await update.message.reply_text("🎨 Generating...")
@@ -276,22 +279,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await update.message.reply_text("❌ Failed to generate image.")
             return
-        
-        # Extract and save user info from any message
+
+        # --- Auto-save personal info ---
         extracted = extract_all_info(text)
+        current = get_user_info(user_id) or {}
         if extracted:
-            current = get_user_info(user_id) or {}
             save_user_info(
                 user_id,
                 name=extracted.get('name') or current.get('name'),
                 birthday=extracted.get('birthday') or current.get('birthday'),
                 zodiac=extracted.get('zodiac') or current.get('zodiac'),
-                facts=current.get('facts') or ""
+                facts=text  # Save the whole message as a fact
             )
-        
-        # Normal chat
+            logging.info(f"✅ Auto-saved info for {user_id}")
+
+        # --- Normal chat ---
         reply = ask_groq(user_id, text)
         await update.message.reply_text(reply)
+
     except Exception as e:
         logging.error(f"❌ Error: {e}")
         await update.message.reply_text("Error. Please try again.")
@@ -302,12 +307,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
     logging.info("🚀 Petoy 2.0 starting...")
-    
+
     bot = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     bot.add_handler(CommandHandler("start", start))
     bot.add_handler(CommandHandler("image", image))
     bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
+
     logging.info("✅ Petoy 2.0 is running!")
     bot.run_polling()
 
