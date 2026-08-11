@@ -85,6 +85,7 @@ def get_history(user_id):
 
 def save_user_info(user_id, name=None, birthday=None, zodiac=None, facts=None):
     try:
+        logging.info(f"🔥 SAVE_USER_INFO CALLED for {user_id}: name={name}, birthday={birthday}, zodiac={zodiac}")
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
