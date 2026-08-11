@@ -1,3 +1,10 @@
+"""
+Petoy 2.0 — Telegram Bot with ACE Self-Learning
+Created by Jay
+
+ACE = Agentic Context Engine — learns from every conversation
+"""
+
 import os
 import logging
 import threading
@@ -8,26 +15,44 @@ import psycopg2.extras
 import random
 import json
 import base64
-import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from flask import Flask
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
 
-logging.basicConfig(level=logging.INFO)
+# ============================================
+# ACE Self-Learning Framework
+# ============================================
+from ace import ACELiteLLM
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# ============================================
+# Environment Variables
+# ============================================
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 DATABASE_URL = os.environ.get("DATABASE_URL")
-HUGGINGFACE_API_KEY = os.environ.get("HUGGINGFACE_API_KEY")
 
 if not all([GROQ_API_KEY, TELEGRAM_BOT_TOKEN, DATABASE_URL]):
-    logging.error("❌ Missing environment variables!")
+    logger.error("❌ Missing environment variables!")
     exit(1)
 
 # ============================================
-# DATABASE
+# ACE Self-Learning Agent
+# ============================================
+petoy_agent = ACELiteLLM(
+    model="groq/llama-3.1-8b-instant",
+    skillbook_path="petoy_skills.json"
+)
+
+logger.info("✅ ACE self-learning agent initialized!")
+
+# ============================================
+# DATABASE SETUP
 # ============================================
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL, sslmode='require')
@@ -36,6 +61,7 @@ def init_db():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
+        
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS messages (
                 id SERIAL PRIMARY KEY,
@@ -45,6 +71,7 @@ def init_db():
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id TEXT PRIMARY KEY,
@@ -55,6 +82,7 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS todos (
                 id SERIAL PRIMARY KEY,
@@ -64,6 +92,7 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS reminders (
                 id SERIAL PRIMARY KEY,
@@ -74,6 +103,7 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS notes (
                 id SERIAL PRIMARY KEY,
@@ -83,25 +113,14 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        
         conn.commit()
         conn.close()
-        logging.info("✅ Database ready")
+        logger.info("✅ Database ready")
     except Exception as e:
-        logging.error(f"❌ DB init error: {e}")
+        logger.error(f"❌ DB init error: {e}")
 
 init_db()
-
-# ============================================
-# FLASK
-# ============================================
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "🤖 Petoy 2.0 is running!"
-
-def run_flask():
-    app.run(host="0.0.0.0", port=10000)
 
 # ============================================
 # DATABASE FUNCTIONS
@@ -117,7 +136,7 @@ def save_message(user_id, role, content):
         conn.commit()
         conn.close()
     except Exception as e:
-        logging.error(f"❌ Save message error: {e}")
+        logger.error(f"❌ Save message error: {e}")
 
 def get_history(user_id):
     try:
@@ -131,7 +150,7 @@ def get_history(user_id):
         conn.close()
         return [{"role": row["role"], "content": row["content"]} for row in rows]
     except Exception as e:
-        logging.error(f"❌ History error: {e}")
+        logger.error(f"❌ History error: {e}")
         return []
 
 def save_user_info(user_id, name=None, birthday=None, zodiac=None, facts=None):
@@ -153,7 +172,7 @@ def save_user_info(user_id, name=None, birthday=None, zodiac=None, facts=None):
         conn.commit()
         conn.close()
     except Exception as e:
-        logging.error(f"❌ Save user error: {e}")
+        logger.error(f"❌ Save user error: {e}")
 
 def get_user_info(user_id):
     try:
@@ -164,7 +183,7 @@ def get_user_info(user_id):
         conn.close()
         return row
     except Exception as e:
-        logging.error(f"❌ Get user error: {e}")
+        logger.error(f"❌ Get user error: {e}")
         return None
 
 def add_todo(user_id, task):
@@ -180,7 +199,7 @@ def add_todo(user_id, task):
         conn.close()
         return todo_id
     except Exception as e:
-        logging.error(f"❌ Add todo error: {e}")
+        logger.error(f"❌ Add todo error: {e}")
         return None
 
 def get_todos(user_id):
@@ -195,7 +214,7 @@ def get_todos(user_id):
         conn.close()
         return rows
     except Exception as e:
-        logging.error(f"❌ Get todos error: {e}")
+        logger.error(f"❌ Get todos error: {e}")
         return []
 
 def add_reminder(user_id, message, remind_at):
@@ -211,7 +230,7 @@ def add_reminder(user_id, message, remind_at):
         conn.close()
         return reminder_id
     except Exception as e:
-        logging.error(f"❌ Add reminder error: {e}")
+        logger.error(f"❌ Add reminder error: {e}")
         return None
 
 def save_note(user_id, title, content):
@@ -227,7 +246,7 @@ def save_note(user_id, title, content):
         conn.close()
         return note_id
     except Exception as e:
-        logging.error(f"❌ Save note error: {e}")
+        logger.error(f"❌ Save note error: {e}")
         return None
 
 def get_notes(user_id):
@@ -242,7 +261,7 @@ def get_notes(user_id):
         conn.close()
         return rows
     except Exception as e:
-        logging.error(f"❌ Get notes error: {e}")
+        logger.error(f"❌ Get notes error: {e}")
         return []
 
 def search_note(user_id, query):
@@ -257,7 +276,7 @@ def search_note(user_id, query):
         conn.close()
         return rows
     except Exception as e:
-        logging.error(f"❌ Search note error: {e}")
+        logger.error(f"❌ Search note error: {e}")
         return []
 
 def delete_note(user_id, note_id):
@@ -272,11 +291,23 @@ def delete_note(user_id, note_id):
         conn.close()
         return True
     except Exception as e:
-        logging.error(f"❌ Delete note error: {e}")
+        logger.error(f"❌ Delete note error: {e}")
         return False
 
 # ============================================
-# 🔍 SEARCH ENGINE
+# FLASK SERVER
+# ============================================
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "🤖 Petoy 2.0 is running with ACE self-learning!"
+
+def run_flask():
+    app.run(host="0.0.0.0", port=10000)
+
+# ============================================
+# SEARCH ENGINE
 # ============================================
 def search_web(query):
     results = []
@@ -402,47 +433,6 @@ def search_wikipedia(query):
         return f"❌ Could not reach Wikipedia"
 
 # ============================================
-# 🎬 VIDEO GENERATION (Hugging Face)
-# ============================================
-def generate_hf_video(prompt):
-    """Generate video using Hugging Face CogVideoX-2b"""
-    if not HUGGINGFACE_API_KEY:
-        logging.error("❌ HUGGINGFACE_API_KEY is not set!")
-        return None
-    
-    url = "https://api-inference.huggingface.co/models/THUDM/CogVideoX-2b"
-    headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
-    payload = {"inputs": prompt}
-    
-    try:
-        logging.info(f"🎬 Sending video request to Hugging Face: {prompt[:50]}...")
-        response = requests.post(url, headers=headers, json=payload, timeout=180)
-        
-        if response.status_code == 200:
-            logging.info(f"✅ Video generated! Size: {len(response.content)} bytes")
-            return response.content
-        elif response.status_code == 503:
-            logging.warning("⏳ Model is loading. Try again in a few seconds.")
-            return None
-        else:
-            logging.error(f"❌ HF API error: {response.status_code} - {response.text[:200]}")
-            return None
-    except Exception as e:
-        logging.error(f"❌ HF video generation error: {e}")
-        return None
-
-def generate_fallback_image(prompt):
-    """Fallback: generate image when video fails"""
-    try:
-        url = f"https://image.pollinations.ai/prompt/{prompt.replace(' ', '%20')}?width=512&height=512&nologo=true"
-        response = requests.get(url, timeout=30)
-        if response.status_code == 200:
-            return response.content
-    except:
-        pass
-    return None
-
-# ============================================
 # IMAGE GENERATOR
 # ============================================
 def generate_image(prompt):
@@ -486,6 +476,7 @@ async def analyze_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         image_base64 = base64.b64encode(response.content).decode('utf-8')
         caption = update.message.caption if update.message.caption else ""
+        
         if "solve" in caption.lower() or "answer" in caption.lower() or "homework" in caption.lower():
             task = "SOLVE the problems in this image. Give only the answers in a numbered list."
         elif "describe" in caption.lower() or "explain" in caption.lower():
@@ -494,6 +485,7 @@ async def analyze_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             task = "Read and extract ALL text from this image."
         else:
             task = "Analyze this image. If it's homework or math, solve it. If it's a photo, describe it briefly."
+        
         await update.message.reply_text("🔍 Analyzing...")
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
@@ -510,13 +502,17 @@ async def analyze_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text(f"❌ Error: {data}")
     except Exception as e:
-        logging.error(f"❌ Image analysis error: {e}")
+        logger.error(f"❌ Image analysis error: {e}")
         await update.message.reply_text("❌ Could not analyze the image.")
 
 # ============================================
-# GROQ AI
+# GROQ AI WITH ACE SELF-LEARNING
 # ============================================
 def ask_groq(user_id, question):
+    """
+    Petoy's brain — now with self-learning via ACE!
+    ACE learns from every interaction and gets smarter over time.
+    """
     user_info = get_user_info(user_id)
     context = ""
     if user_info:
@@ -528,64 +524,27 @@ def ask_groq(user_id, question):
             context += f"Their zodiac sign is {user_info['zodiac']}. "
         if user_info.get("facts"):
             context += f"Additional facts: {user_info['facts']}. "
-    else:
-        context = "The user hasn't shared any personal info yet."
-
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    messages = [
-        {"role": "system", "content": f"""You are Petoy, an AI assistant created by Jay. You remember EVERYTHING about the user. {context}
-
-Your personality:
-- You're casual, hype, and supportive.
-- Use emojis naturally 😎🔥💀😂🎉.
-- Call the user "boss" or "bro" sometimes.
-- Keep replies short and punchy.
-
-🌍 LANGUAGE RULES:
-- Match the user's language EXACTLY.
-
-📌 REMEMBER:
-- If the user says they don't want to talk about something, NEVER bring it up again.
-
-🔍 FEATURES:
-- Search 20+ sources
-- Save and recall notes
-- Math solver, unit converter
-- Time in cities, countdowns
-- Brainstorm, pros/cons, would you rather
-- Image generation and analysis
-- Video generation via Hugging Face CogVideoX-2b"""}
-    ]
-
-    history = get_history(user_id)
-    messages.extend(history)
-    messages.append({"role": "user", "content": question})
-
-    payload = {
-        "model": "llama-3.1-8b-instant",
-        "messages": messages,
-        "temperature": 0.7,
-        "max_tokens": 500
-    }
-
+    
     try:
-        response = requests.post(url, headers=headers, json=payload)
-        data = response.json()
-        reply = data["choices"][0]["message"]["content"]
+        # ACE learns from every question
+        answer = petoy_agent.ask(question)
+        
+        # Save to database
         save_message(user_id, "user", question)
-        save_message(user_id, "assistant", reply)
-        return reply
+        save_message(user_id, "assistant", answer)
+        
+        # Save ACE's learned skills periodically
+        if random.randint(1, 10) == 1:
+            petoy_agent.save_skillbook("petoy_skills.json")
+            logger.info("💾 ACE skillbook saved!")
+        
+        return answer
     except Exception as e:
-        logging.error(f"❌ Groq error: {e}")
+        logger.error(f"❌ ACE error: {e}")
         return "Error. Please try again."
 
 # ============================================
-# EXTRACT INFO
+# EXTRACT USER INFO
 # ============================================
 def extract_all_info(text):
     info = {}
@@ -611,18 +570,18 @@ from telegram.ext import Application, MessageHandler, filters, CommandHandler, C
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 Hello! I'm Petoy 2.0!\n\n"
+        "🧠 **Petoy 2.0 — Self-Learning AI**\n\n"
+        "🤖 I learn from every conversation! The more we talk, the smarter I get.\n\n"
         "🔍 **Search:** 'search for Elon Musk'\n"
         "📝 **Notes:** 'save note: meeting at 3pm'\n"
         "🧮 **Math:** 'solve 2+2'\n"
-        "📏 **Convert:** 'convert 10 km to miles'\n"
         "🕐 **Time:** 'time in Tokyo'\n"
         "⏳ **Countdown:** 'countdown to December 25'\n"
         "💡 **Brainstorm:** 'brainstorm: startup ideas'\n"
-        "🎬 **Video:** 'make a video of a cat walking'\n"
         "🖼️ **Image:** 'make me an image of a cat'\n"
         "📸 **Send a photo** and I'll analyze it!\n\n"
-        "🌍 I speak ANY language! Just chat naturally! 🗣️"
+        "🌍 I speak ANY language!\n"
+        "🧠 I learn from every interaction!"
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -630,62 +589,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = str(update.message.from_user.id)
         text = update.message.text if update.message.text else ""
         caption = update.message.caption if update.message.caption else ""
-        logging.info(f"📩 {user_id}: {text or caption}")
+        logger.info(f"📩 {user_id}: {text or caption}")
 
         # --- IMAGE ANALYSIS ---
         if update.message.photo:
             await analyze_image(update, context)
-            return
-
-        # --- VIDEO GENERATION (Hugging Face) ---
-        video_keywords = [
-            r'make a video of (.+)',
-            r'generate a video of (.+)',
-            r'create a video of (.+)',
-            r'video of (.+)',
-            r'make me a video of (.+)',
-            r'generate me a video of (.+)',
-            r'create me a video of (.+)'
-        ]
-        
-        video_match = None
-        for pattern in video_keywords:
-            video_match = re.search(pattern, text, re.IGNORECASE)
-            if video_match:
-                break
-        
-        if video_match:
-            prompt = video_match.group(1).strip()
-            
-            if not HUGGINGFACE_API_KEY:
-                await update.message.reply_text("❌ Hugging Face API key not configured.")
-                return
-            
-            if not prompt:
-                await update.message.reply_text("⚠️ What kind of video do you want?")
-                return
-            
-            await update.message.reply_text("🎬 Generating your video with Hugging Face... this may take 1-3 minutes.")
-            
-            video_data = generate_hf_video(prompt)
-            
-            if video_data:
-                await update.message.reply_video(
-                    video=video_data,
-                    caption=f"🎥 Here's your video: {prompt}",
-                    supports_streaming=True
-                )
-            else:
-                # Fallback: generate image
-                await update.message.reply_text("⚠️ Video generation failed. Generating an image instead...")
-                image_data = generate_fallback_image(prompt)
-                if image_data:
-                    await update.message.reply_photo(
-                        photo=image_data,
-                        caption=f"🖼️ Here's an image for: {prompt}"
-                    )
-                else:
-                    await update.message.reply_text("❌ Could not generate video or image. Try again.")
             return
 
         # --- SEARCH ---
@@ -703,6 +611,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"📚 Searching Wikipedia for '{query}'...")
             result = search_wikipedia(query)
             await update.message.reply_text(result[:1000])
+            return
+
+        # --- IMAGE GENERATION ---
+        image_prompt = extract_image_prompt(text)
+        if image_prompt:
+            await update.message.reply_text("🎨 Generating...")
+            image_data = generate_image(image_prompt)
+            if image_data:
+                await update.message.reply_photo(photo=image_data, caption=f"🖼️ {image_prompt}")
+            else:
+                await update.message.reply_text("❌ Failed to generate image.")
             return
 
         # --- NOTES ---
@@ -879,18 +798,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     zodiac=extracted.get('zodiac') or current.get('zodiac'),
                     facts=text
                 )
-                logging.info(f"✅ FORCE SAVED: {extracted}")
-
-        # --- IMAGE GENERATION ---
-        image_prompt = extract_image_prompt(text)
-        if image_prompt:
-            await update.message.reply_text("🎨 Generating...")
-            image_data = generate_image(image_prompt)
-            if image_data:
-                await update.message.reply_photo(photo=image_data, caption=f"🖼️ {image_prompt}")
-            else:
-                await update.message.reply_text("❌ Failed to generate image.")
-            return
+                logger.info(f"✅ FORCE SAVED: {extracted}")
 
         # --- REMINDERS ---
         remind_match = re.search(r'remind me to (.+) in (\d+) (minutes?|mins?|seconds?|secs?|hours?|hrs?|days?)', text, re.IGNORECASE)
@@ -909,6 +817,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             remind_at = datetime.now() + delta
             add_reminder(user_id, task, remind_at)
             await update.message.reply_text(f"⏰ Got it! I'll remind you to '{task}' in {amount} {unit}.")
+            return
+
+        # --- TODO ---
+        if re.search(r'add task(?: |:)(.+)', text, re.IGNORECASE):
+            match = re.search(r'add task(?: |:)(.+)', text, re.IGNORECASE)
+            if match:
+                task = match.group(1).strip()
+                add_todo(user_id, task)
+                await update.message.reply_text(f"✅ Added task: {task}")
+            return
+
+        if re.search(r'show my tasks|my tasks', text, re.IGNORECASE):
+            todos = get_todos(user_id)
+            if todos:
+                tasks_text = "📝 Your tasks:\n"
+                for i, todo in enumerate(todos, 1):
+                    tasks_text += f"{i}. {todo['task']}\n"
+                await update.message.reply_text(tasks_text)
+            else:
+                await update.message.reply_text("✅ No pending tasks! You're all caught up.")
             return
 
         # --- JOKE ---
@@ -981,32 +909,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['trivia_answer'] = q['a']
             return
 
-        # --- TODO ---
-        if re.search(r'add task(?: |:)(.+)', text, re.IGNORECASE):
-            match = re.search(r'add task(?: |:)(.+)', text, re.IGNORECASE)
-            if match:
-                task = match.group(1).strip()
-                add_todo(user_id, task)
-                await update.message.reply_text(f"✅ Added task: {task}")
-            return
-
-        if re.search(r'show my tasks|my tasks', text, re.IGNORECASE):
-            todos = get_todos(user_id)
-            if todos:
-                tasks_text = "📝 Your tasks:\n"
-                for i, todo in enumerate(todos, 1):
-                    tasks_text += f"{i}. {todo['task']}\n"
-                await update.message.reply_text(tasks_text)
-            else:
-                await update.message.reply_text("✅ No pending tasks! You're all caught up.")
-            return
-
         # --- NORMAL CHAT ---
         reply = ask_groq(user_id, text)
         await update.message.reply_text(reply)
 
     except Exception as e:
-        logging.error(f"❌ Error: {e}")
+        logger.error(f"❌ Error: {e}")
         await update.message.reply_text("Error. Please try again.")
 
 # ============================================
@@ -1014,14 +922,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
-    logging.info("🚀 Petoy 2.0 starting with Hugging Face video...")
+    logger.info("🚀 Petoy 2.0 starting with ACE self-learning...")
 
     bot = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     bot.add_handler(CommandHandler("start", start))
     bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     bot.add_handler(MessageHandler(filters.PHOTO, handle_message))
 
-    logging.info("✅ Petoy 2.0 is running with Hugging Face video!")
+    logger.info("✅ Petoy 2.0 is running with ACE self-learning!")
     bot.run_polling()
 
 if __name__ == "__main__":
