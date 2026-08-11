@@ -7,6 +7,7 @@ import psycopg2
 import psycopg2.extras
 import random
 import json
+import base64
 from datetime import datetime, timedelta
 from flask import Flask
 from telegram import Update
@@ -248,6 +249,73 @@ def extract_image_prompt(text):
     return None
 
 # ============================================
+# IMAGE ANALYSIS (Vision)
+# ============================================
+async def analyze_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Analyze an image sent by the user"""
+    try:
+        # Get the image file from the user
+        photo = update.message.photo[-1]  # Get the highest quality image
+        file = await photo.get_file()
+        file_path = file.file_path
+        
+        # Download the image
+        response = requests.get(file_path)
+        if response.status_code != 200:
+            await update.message.reply_text("❌ Could not download image.")
+            return
+        
+        # Convert image to base64
+        image_base64 = base64.b64encode(response.content).decode('utf-8')
+        
+        # Ask user for a question about the image
+        await update.message.reply_text("🔍 I'm analyzing the image...")
+        
+        # Use Groq's vision model (LLaVA)
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        # Get the user's question (or use default)
+        if context.args:
+            question = ' '.join(context.args)
+        else:
+            question = "What's in this image? Describe it in detail."
+        
+        payload = {
+            "model": "llava-v1.5-7b-4096-preview",  # Vision model
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": question},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}
+                        }
+                    ]
+                }
+            ],
+            "temperature": 0.7,
+            "max_tokens": 500
+        }
+        
+        response = requests.post(url, headers=headers, json=payload)
+        data = response.json()
+        
+        if "choices" in data:
+            reply = data["choices"][0]["message"]["content"]
+            await update.message.reply_text(f"🖼️ **Image Analysis:**\n\n{reply}")
+        else:
+            await update.message.reply_text(f"❌ Error analyzing image: {data}")
+            
+    except Exception as e:
+        logging.error(f"❌ Image analysis error: {e}")
+        await update.message.reply_text("❌ Could not analyze the image. Please try again.")
+
+# ============================================
 # GROQ AI
 # ============================================
 def ask_groq(user_id, question):
@@ -284,7 +352,7 @@ Your personality:
 - Keep replies short and punchy unless detail is needed.
 - Never be boring. Always bring energy. 🚀
 
-LANGUAGE RULES:
+🌍 LANGUAGE RULES (IMPORTANT):
 - Match the user's language EXACTLY.
 - If they speak Tagalog, reply in Tagalog.
 - If they speak English, reply in English.
@@ -292,7 +360,8 @@ LANGUAGE RULES:
 - If they speak any language, reply in that same language.
 - You can mix languages if the user does (Taglish, Spanglish, etc.).
 - If the user switches languages, switch with them immediately.
-- Never force a language — just follow the user's lead."""}
+- Never force a language — just follow the user's lead.
+- Be natural and fluid in any language."""}
     ]
 
     history = get_history(user_id)
@@ -326,12 +395,12 @@ from telegram.ext import Application, MessageHandler, filters, CommandHandler, C
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 Hello! I'm Petoy 2.0!\n\n"
+        "📸 Send me a photo and I'll describe it!\n"
+        "🖼️ 'make me an image of a cat'\n"
         "💬 I remember everything you tell me.\n"
         "🌍 I speak ANY language — just chat in yours!\n"
-        "🖼️ 'make me an image of a cat'\n"
         "⏰ 'remind me to call mom in 10 minutes'\n"
         "📝 'add task: Buy milk'\n"
-        "🎲 'flip a coin' or 'roll a dice'\n"
         "😂 'tell me a joke' or 'roast me'\n"
         "📚 'define serendipity'\n\n"
         "Just chat naturally — I'll match your language! 🗣️"
@@ -340,8 +409,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user_id = str(update.message.from_user.id)
-        text = update.message.text
+        text = update.message.text if update.message.text else ""
         logging.info(f"📩 {user_id}: {text}")
+
+        # --- IMAGE ANALYSIS (when user sends a photo) ---
+        if update.message.photo:
+            await analyze_image(update, context)
+            return
 
         # --- FORCE SAVE TO USERS TABLE ---
         personal_keywords = ['my name', 'birthday', 'i\'m', 'favorite', 'pet', 'age', 'years old']
@@ -517,13 +591,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
-    logging.info("🚀 Petoy 2.0 starting with ALL EASY FEATURES + MULTI-LANGUAGE...")
+    logging.info("🚀 Petoy 2.0 starting with ALL EASY FEATURES + MULTI-LANGUAGE + VISION...")
 
     bot = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     bot.add_handler(CommandHandler("start", start))
     bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    bot.add_handler(MessageHandler(filters.PHOTO, handle_message))  # For images
 
-    logging.info("✅ Petoy 2.0 is running with ALL EASY FEATURES + MULTI-LANGUAGE!")
+    logging.info("✅ Petoy 2.0 is running with ALL EASY FEATURES + MULTI-LANGUAGE + VISION!")
     bot.run_polling()
 
 if __name__ == "__main__":
