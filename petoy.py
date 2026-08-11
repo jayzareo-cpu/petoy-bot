@@ -20,7 +20,7 @@ if not all([GROQ_API_KEY, TELEGRAM_BOT_TOKEN, DATABASE_URL]):
     exit(1)
 
 # ============================================
-# PERMANENT DATABASE
+# DATABASE (Everything is saved here)
 # ============================================
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL, sslmode='require')
@@ -42,12 +42,14 @@ def init_db():
             CREATE TABLE IF NOT EXISTS users (
                 user_id TEXT PRIMARY KEY,
                 name TEXT,
+                birthday TEXT,
+                facts TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         conn.commit()
         conn.close()
-        logging.info("✅ Permanent database ready")
+        logging.info("✅ Database ready")
     except Exception as e:
         logging.error(f"❌ DB init error: {e}")
 
@@ -61,7 +63,6 @@ def save_message(user_id, role, content):
         )
         conn.commit()
         conn.close()
-        logging.info(f"💾 Message saved")
     except Exception as e:
         logging.error(f"❌ Save error: {e}")
 
@@ -70,7 +71,7 @@ def get_history(user_id):
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute(
-            "SELECT role, content FROM messages WHERE user_id = %s ORDER BY id LIMIT 20",
+            "SELECT role, content FROM messages WHERE user_id = %s ORDER BY id LIMIT 30",
             (user_id,)
         )
         rows = cursor.fetchall()
@@ -80,30 +81,37 @@ def get_history(user_id):
         logging.error(f"❌ History error: {e}")
         return []
 
-def save_user_name(user_id, name):
+def save_user_info(user_id, name=None, birthday=None, facts=None):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO users (user_id, name) VALUES (%s, %s) ON CONFLICT (user_id) DO UPDATE SET name = EXCLUDED.name",
-            (user_id, name)
+            """
+            INSERT INTO users (user_id, name, birthday, facts)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET
+                name = EXCLUDED.name,
+                birthday = EXCLUDED.birthday,
+                facts = EXCLUDED.facts
+            """,
+            (user_id, name, birthday, facts)
         )
         conn.commit()
         conn.close()
-        logging.info(f"✅ Permanent name saved: {name}")
+        logging.info(f"✅ User info saved: name={name}, birthday={birthday}")
     except Exception as e:
-        logging.error(f"❌ Save name error: {e}")
+        logging.error(f"❌ Save user error: {e}")
 
-def get_user_name(user_id):
+def get_user_info(user_id):
     try:
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cursor.execute("SELECT name FROM users WHERE user_id = %s", (user_id,))
+        cursor.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
         row = cursor.fetchone()
         conn.close()
-        return row["name"] if row else None
+        return row
     except Exception as e:
-        logging.error(f"❌ Get name error: {e}")
+        logging.error(f"❌ Get user error: {e}")
         return None
 
 init_db()
@@ -151,12 +159,24 @@ def extract_image_prompt(text):
     return None
 
 # ============================================
-# GROQ AI (Permanent Memory)
+# GROQ AI (Full Memory)
 # ============================================
 def ask_groq(user_id, question):
-    user_name = get_user_name(user_id)
-    name_context = f"The user's name is {user_name}." if user_name else "The user hasn't told me their name yet."
-
+    user_info = get_user_info(user_id)
+    
+    # Build context from everything we know about the user
+    context = ""
+    if user_info:
+        if user_info.get("name"):
+            context += f"The user's name is {user_info['name']}. "
+        if user_info.get("birthday"):
+            context += f"Their birthday is {user_info['birthday']}. "
+        if user_info.get("facts"):
+            context += f"Extra info: {user_info['facts']}. "
+    
+    if not context:
+        context = "The user hasn't shared any personal info yet."
+    
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
@@ -164,7 +184,7 @@ def ask_groq(user_id, question):
     }
     
     messages = [
-        {"role": "system", "content": f"You are Petoy, created by Jay. {name_context} Always respond in English. Never use Filipino/Tagalog."}
+        {"role": "system", "content": f"You are Petoy, an AI assistant. You remember EVERYTHING about the user. {context} Always respond in English."}
     ]
     
     history = get_history(user_id)
@@ -184,6 +204,19 @@ def ask_groq(user_id, question):
         reply = data["choices"][0]["message"]["content"]
         save_message(user_id, "user", question)
         save_message(user_id, "assistant", reply)
+        
+        # Extract and save any new info from the user's message
+        name_match = re.search(r'my name is (\w+)', question, re.IGNORECASE)
+        birthday_match = re.search(r'my birthday is (\w+)', question, re.IGNORECASE)
+        if name_match or birthday_match or len(question) > 30:
+            current_info = get_user_info(user_id) or {}
+            save_user_info(
+                user_id,
+                name=name_match.group(1) if name_match else current_info.get("name"),
+                birthday=birthday_match.group(1) if birthday_match else current_info.get("birthday"),
+                facts=current_info.get("facts") or ""
+            )
+        
         return reply
     except Exception as e:
         logging.error(f"❌ Groq error: {e}")
@@ -197,11 +230,15 @@ from telegram.ext import Application, MessageHandler, filters, CommandHandler, C
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 Hello! I'm Petoy 2.0 — permanent memory, permanent you.\n\n"
-        "💬 Tell me your name and I'll remember it forever.\n"
-        "🖼️ Send: 'make me an image of a cat'\n"
+        "🤖 Hello! I'm Petoy 2.0.\n\n"
+        "🧠 I remember EVERYTHING you tell me:\n"
+        "• Your name\n"
+        "• Your birthday\n"
+        "• Your secrets\n"
+        "• Every conversation we've ever had\n\n"
+        "🖼️ Say: 'make me an image of a cat'\n"
         "🗣️ I only speak English.\n\n"
-        "How can I help you today?"
+        "Tell me something about yourself — I'll never forget."
     )
 
 async def image(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -222,14 +259,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = update.message.text
         logging.info(f"📩 {user_id}: {text}")
         
-        # Detect name
-        name_match = re.search(r'my name is (\w+)', text, re.IGNORECASE)
-        if name_match:
-            name = name_match.group(1)
-            save_user_name(user_id, name)
-            await update.message.reply_text(f"✅ Got it! I'll remember your name is {name}.")
-            return
-        
         # Detect image
         image_prompt = extract_image_prompt(text)
         if image_prompt:
@@ -241,7 +270,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ Failed to generate image.")
             return
         
-        # Normal chat
+        # Normal chat (with full memory)
         reply = ask_groq(user_id, text)
         await update.message.reply_text(reply)
     except Exception as e:
@@ -253,7 +282,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
-    logging.info("🚀 Petoy 2.0 starting...")
+    logging.info("🚀 Petoy 2.0 starting with FULL MEMORY...")
     
     bot = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     bot.add_handler(CommandHandler("start", start))
