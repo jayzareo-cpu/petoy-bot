@@ -252,7 +252,7 @@ def extract_image_prompt(text):
 # IMAGE ANALYSIS (Vision) — Latest Free Model
 # ============================================
 async def analyze_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Analyze an image sent by the user"""
+    """Analyze an image sent by the user — auto-detects what to do"""
     try:
         photo = update.message.photo[-1]
         file = await photo.get_file()
@@ -264,6 +264,28 @@ async def analyze_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         image_base64 = base64.b64encode(response.content).decode('utf-8')
+        
+        # Check if user included a question/command with the image
+        caption = update.message.caption if update.message.caption else ""
+        
+        # Determine what to do based on user's message
+        if "solve" in caption.lower() or "answer" in caption.lower() or "homework" in caption.lower():
+            task = f"SOLVE the problems in this image. Give only the answers in a numbered list. Do NOT describe the image."
+        elif "describe" in caption.lower() or "explain" in caption.lower():
+            task = f"DESCRIBE this image in detail. Focus on what you see."
+        elif "read" in caption.lower() or "text" in caption.lower():
+            task = f"Read and extract ALL text from this image. Do not add extra commentary."
+        else:
+            # Auto-detect: if it looks like math/homework, solve it. Otherwise, offer options.
+            task = f"""
+            Analyze this image and determine what to do:
+            1. If it contains math problems, homework, or questions — SOLVE them directly. Give only answers.
+            2. If it's a landscape, photo, or random image — ASK the user if they want it described, solved, or something else.
+            3. If it contains text — EXTRACT the text.
+            
+            Respond accordingly.
+            """
+        
         await update.message.reply_text("🔍 I'm analyzing the image...")
         
         url = "https://api.groq.com/openai/v1/chat/completions"
@@ -272,18 +294,13 @@ async def analyze_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Content-Type": "application/json"
         }
         
-        if context.args:
-            question = ' '.join(context.args)
-        else:
-            question = "What's in this image? Describe it in detail."
-        
         payload = {
-            "model": "qwen/qwen3.6-27b",  # ✅ Latest, free, working vision model
+            "model": "qwen/qwen3.6-27b",
             "messages": [
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": question},
+                        {"type": "text", "text": task},
                         {
                             "type": "image_url",
                             "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}
@@ -291,8 +308,8 @@ async def analyze_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ]
                 }
             ],
-            "temperature": 0.7,
-            "max_tokens": 500
+            "temperature": 0.3,
+            "max_tokens": 1000
         }
         
         response = requests.post(url, headers=headers, json=payload)
@@ -300,7 +317,7 @@ async def analyze_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if "choices" in data:
             reply = data["choices"][0]["message"]["content"]
-            await update.message.reply_text(f"🖼️ **Image Analysis:**\n\n{reply}")
+            await update.message.reply_text(f"🖼️ {reply}")
         else:
             await update.message.reply_text(f"❌ Error analyzing image: {data}")
             
@@ -345,16 +362,21 @@ Your personality:
 - Keep replies short and punchy unless detail is needed.
 - Never be boring. Always bring energy. 🚀
 
-🌍 LANGUAGE RULES (IMPORTANT):
+🌍 LANGUAGE RULES:
 - Match the user's language EXACTLY.
 - If they speak Tagalog, reply in Tagalog.
 - If they speak English, reply in English.
-- If they speak Spanish, reply in Spanish.
 - If they speak any language, reply in that same language.
-- You can mix languages if the user does (Taglish, Spanglish, etc.).
-- If the user switches languages, switch with them immediately.
-- Never force a language — just follow the user's lead.
-- Be natural and fluid in any language."""}
+- You can mix languages if the user does.
+
+🎯 IMAGE RULES (CRITICAL):
+- If the user sends a math worksheet or homework image, SOLVE it directly. Give only the answers.
+- DO NOT describe the image layout for homework.
+- If it's a random photo (landscape, object, etc.), ASK the user if they want a description.
+- If the user says "solve" or "answer", solve it.
+- If the user says "describe", describe it.
+- If the user says "read" or "text", extract the text.
+- Always follow the user's command."""}
     ]
 
     history = get_history(user_id)
@@ -388,14 +410,16 @@ from telegram.ext import Application, MessageHandler, filters, CommandHandler, C
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 Hello! I'm Petoy 2.0!\n\n"
-        "📸 Send me a photo and I'll describe it!\n"
+        "📸 Send me a photo and I'll:\n"
+        "  • Solve homework/math problems 📐\n"
+        "  • Describe landscapes/objects 🌄\n"
+        "  • Read text from images 📝\n"
         "🖼️ 'make me an image of a cat'\n"
         "💬 I remember everything you tell me.\n"
         "🌍 I speak ANY language — just chat in yours!\n"
         "⏰ 'remind me to call mom in 10 minutes'\n"
         "📝 'add task: Buy milk'\n"
-        "😂 'tell me a joke' or 'roast me'\n"
-        "📚 'define serendipity'\n\n"
+        "😂 'tell me a joke' or 'roast me'\n\n"
         "Just chat naturally — I'll match your language! 🗣️"
     )
 
@@ -403,7 +427,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user_id = str(update.message.from_user.id)
         text = update.message.text if update.message.text else ""
-        logging.info(f"📩 {user_id}: {text}")
+        caption = update.message.caption if update.message.caption else ""
+        logging.info(f"📩 {user_id}: {text or caption}")
 
         # --- IMAGE ANALYSIS (when user sends a photo) ---
         if update.message.photo:
@@ -584,14 +609,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
-    logging.info("🚀 Petoy 2.0 starting with ALL EASY FEATURES + MULTI-LANGUAGE + VISION...")
+    logging.info("🚀 Petoy 2.0 starting with SMART IMAGE ANALYSIS...")
 
     bot = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     bot.add_handler(CommandHandler("start", start))
     bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    bot.add_handler(MessageHandler(filters.PHOTO, handle_message))  # For images
+    bot.add_handler(MessageHandler(filters.PHOTO, handle_message))
 
-    logging.info("✅ Petoy 2.0 is running with ALL EASY FEATURES + MULTI-LANGUAGE + VISION!")
+    logging.info("✅ Petoy 2.0 is running with SMART IMAGE ANALYSIS!")
     bot.run_polling()
 
 if __name__ == "__main__":
