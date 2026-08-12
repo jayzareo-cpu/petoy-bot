@@ -8,6 +8,7 @@ import psycopg2.extras
 import random
 import json
 import base64
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from flask import Flask
@@ -90,6 +91,16 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS timers (
+                id SERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                message TEXT NOT NULL,
+                timer_at TIMESTAMP NOT NULL,
+                done BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
         conn.commit()
         conn.close()
         logger.info("✅ Database ready")
@@ -131,6 +142,161 @@ def get_blocked_topics(user_id):
     except Exception as e:
         logger.error(f"❌ Get blocked topics error: {e}")
         return []
+
+# ============================================
+# TIMER FUNCTIONS
+# ============================================
+def add_timer(user_id, message, timer_at):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO timers (user_id, message, timer_at) VALUES (%s, %s, %s) RETURNING id",
+            (user_id, message, timer_at)
+        )
+        timer_id = cursor.fetchone()[0]
+        conn.commit()
+        conn.close()
+        logger.info(f"⏰ Timer saved: {message} at {timer_at}")
+        return timer_id
+    except Exception as e:
+        logger.error(f"❌ Add timer error: {e}")
+        return None
+
+def get_timers(user_id):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute(
+            "SELECT id, message, timer_at FROM timers WHERE user_id = %s AND done = FALSE ORDER BY timer_at",
+            (user_id,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        logger.error(f"❌ Get timers error: {e}")
+        return []
+
+def delete_timer(user_id, timer_id):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM timers WHERE user_id = %s AND id = %s",
+            (user_id, timer_id)
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"❌ Delete timer error: {e}")
+        return False
+
+# ============================================
+# REMINDER FUNCTIONS
+# ============================================
+def add_reminder(user_id, message, remind_at):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO reminders (user_id, message, remind_at) VALUES (%s, %s, %s) RETURNING id",
+            (user_id, message, remind_at)
+        )
+        reminder_id = cursor.fetchone()[0]
+        conn.commit()
+        conn.close()
+        logger.info(f"🔔 Reminder saved: {message} at {remind_at}")
+        return reminder_id
+    except Exception as e:
+        logger.error(f"❌ Add reminder error: {e}")
+        return None
+
+def get_reminders(user_id):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute(
+            "SELECT id, message, remind_at FROM reminders WHERE user_id = %s AND done = FALSE ORDER BY remind_at",
+            (user_id,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        logger.error(f"❌ Get reminders error: {e}")
+        return []
+
+def delete_reminder(user_id, reminder_id):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM reminders WHERE user_id = %s AND id = %s",
+            (user_id, reminder_id)
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"❌ Delete reminder error: {e}")
+        return False
+
+# ============================================
+# BACKGROUND TIMER CHECK
+# ============================================
+def check_timers_and_reminders(bot):
+    """Background thread to check for due timers and reminders"""
+    while True:
+        try:
+            # Check timers
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cursor.execute(
+                "SELECT id, user_id, message FROM timers WHERE timer_at <= NOW() AND done = FALSE"
+            )
+            due_timers = cursor.fetchall()
+            
+            for timer in due_timers:
+                logger.info(f"⏰ Timer due for user {timer['user_id']}: {timer['message']}")
+                # Mark as done
+                cursor2 = conn.cursor()
+                cursor2.execute(
+                    "UPDATE timers SET done = TRUE WHERE id = %s",
+                    (timer['id'],)
+                )
+                cursor2.close()
+                # Send reminder via bot
+                try:
+                    bot.send_message(chat_id=timer['user_id'], text=f"⏰ **Timer is up!** {timer['message']}")
+                except:
+                    pass
+            
+            # Check reminders
+            cursor.execute(
+                "SELECT id, user_id, message FROM reminders WHERE remind_at <= NOW() AND done = FALSE"
+            )
+            due_reminders = cursor.fetchall()
+            
+            for reminder in due_reminders:
+                logger.info(f"🔔 Reminder due for user {reminder['user_id']}: {reminder['message']}")
+                cursor2 = conn.cursor()
+                cursor2.execute(
+                    "UPDATE reminders SET done = TRUE WHERE id = %s",
+                    (reminder['id'],)
+                )
+                cursor2.close()
+                try:
+                    bot.send_message(chat_id=reminder['user_id'], text=f"🔔 **Reminder!** {reminder['message']}")
+                except:
+                    pass
+            
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.error(f"❌ Check timers/reminders error: {e}")
+        time.sleep(30)  # Check every 30 seconds
 
 # ============================================
 # FLASK
@@ -238,22 +404,6 @@ def get_todos(user_id):
     except Exception as e:
         logger.error(f"❌ Get todos error: {e}")
         return []
-
-def add_reminder(user_id, message, remind_at):
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO reminders (user_id, message, remind_at) VALUES (%s, %s, %s) RETURNING id",
-            (user_id, message, remind_at)
-        )
-        reminder_id = cursor.fetchone()[0]
-        conn.commit()
-        conn.close()
-        return reminder_id
-    except Exception as e:
-        logger.error(f"❌ Add reminder error: {e}")
-        return None
 
 def save_note(user_id, title, content):
     try:
@@ -488,7 +638,7 @@ async def analyze_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption = update.message.caption if update.message.caption else ""
         caption_lower = caption.lower()
 
-        # --- NEGATIVE COMMANDS (30+ ways to say "don't") ---
+        # --- NEGATIVE COMMANDS ---
         negative_keywords = [
             "don't solve", "dont solve", "no solve", "not solve", "do not solve",
             "don't describe", "dont describe", "no describe", "not describe", "do not describe",
@@ -543,7 +693,6 @@ RULES:
             data = response.json()
             if "choices" in data:
                 reply = data["choices"][0]["message"]["content"]
-                # Clean up
                 reply = re.sub(r'<think>.*?</think>', '', reply, flags=re.DOTALL)
                 reply = re.sub(r'\$\\frac\{(\d+)\}\{(\d+)\}\$', r'\1/\2', reply)
                 reply = re.sub(r'\\\[|\\\]|\\\(|\\\)', '', reply)
@@ -555,7 +704,7 @@ RULES:
                 await update.message.reply_text(f"❌ Error: {data}")
             return
 
-        # --- INSTRUCTIONS MODE (ONLY if user asks) ---
+        # --- INSTRUCTIONS MODE ---
         if "teach me" in caption_lower or "show steps" in caption_lower or "instructions" in caption_lower:
             task = """Teach the user how to solve these problems. Show step-by-step instructions.
             Explain how to add fractions with like denominators.
@@ -603,7 +752,6 @@ RULES:
                 data = response.json()
                 if "choices" in data:
                     reply = data["choices"][0]["message"]["content"]
-                    # Clean up
                     reply = re.sub(r'<think>.*?</think>', '', reply, flags=re.DOTALL)
                     reply = re.sub(r'\$\\frac\{(\d+)\}\{(\d+)\}\$', r'\1/\2', reply)
                     reply = re.sub(r'\\\[|\\\]|\\\(|\\\)', '', reply)
@@ -698,6 +846,7 @@ Your personality:
 - Search 20+ sources
 - Save and recall notes
 - To-do list and reminders
+- Timers and countdowns
 - Math solver and unit converter
 - Time in cities and countdowns
 - Brainstorm and pros/cons
@@ -761,6 +910,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• 'describe' — get a description\n"
         "• 'where is this' — guess the location\n"
         "• 'don't solve' — cancel math solving\n\n"
+        "⏰ **Timers & Reminders:**\n"
+        "• 'set a timer for 5 minutes'\n"
+        "• 'remind me to call mom in 10 minutes'\n"
+        "• 'show timers' — list active timers\n"
+        "• 'show reminders' — list active reminders\n"
+        "• 'cancel timer 1' — cancel timer #1\n"
+        "• 'cancel reminder 1' — cancel reminder #1\n\n"
         "🧠 I learn from my mistakes! Say 'stop talking about [topic]' to block it.\n\n"
         "🔍 'search for Elon Musk'\n"
         "📝 'save note: meeting at 3pm'\n"
@@ -786,6 +942,69 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # --- IMAGE ANALYSIS ---
         if update.message.photo:
             await analyze_image(update, context)
+            return
+
+        # --- TIMER: SET ---
+        timer_match = re.search(r'set a timer for (\d+) minutes?', text, re.IGNORECASE)
+        if timer_match:
+            minutes = int(timer_match.group(1))
+            timer_at = datetime.now() + timedelta(minutes=minutes)
+            add_timer(user_id, f"Timer for {minutes} minutes", timer_at)
+            await update.message.reply_text(f"⏰ Timer set for {minutes} minutes. I'll remind you at {timer_at.strftime('%I:%M %p')}!")
+            return
+
+        # --- TIMER: SHOW ---
+        if re.search(r'show timers', text, re.IGNORECASE):
+            timers = get_timers(user_id)
+            if timers:
+                timer_list = "⏰ **Your active timers:**\n"
+                for i, timer in enumerate(timers, 1):
+                    timer_list += f"{i}. {timer['message']} at {timer['timer_at'].strftime('%I:%M %p')}\n"
+                await update.message.reply_text(timer_list)
+            else:
+                await update.message.reply_text("⏰ No active timers.")
+            return
+
+        # --- TIMER: CANCEL ---
+        cancel_timer_match = re.search(r'cancel timer (\d+)', text, re.IGNORECASE)
+        if cancel_timer_match:
+            timer_id = int(cancel_timer_match.group(1))
+            if delete_timer(user_id, timer_id):
+                await update.message.reply_text(f"✅ Timer {timer_id} cancelled.")
+            else:
+                await update.message.reply_text("❌ Could not cancel timer.")
+            return
+
+        # --- REMINDER: SET ---
+        reminder_match = re.search(r'remind me to (.+) in (\d+) minutes?', text, re.IGNORECASE)
+        if reminder_match:
+            message = reminder_match.group(1)
+            minutes = int(reminder_match.group(2))
+            remind_at = datetime.now() + timedelta(minutes=minutes)
+            add_reminder(user_id, message, remind_at)
+            await update.message.reply_text(f"🔔 Reminder set: '{message}' in {minutes} minutes at {remind_at.strftime('%I:%M %p')}!")
+            return
+
+        # --- REMINDER: SHOW ---
+        if re.search(r'show reminders', text, re.IGNORECASE):
+            reminders = get_reminders(user_id)
+            if reminders:
+                reminder_list = "🔔 **Your active reminders:**\n"
+                for i, reminder in enumerate(reminders, 1):
+                    reminder_list += f"{i}. {reminder['message']} at {reminder['remind_at'].strftime('%I:%M %p')}\n"
+                await update.message.reply_text(reminder_list)
+            else:
+                await update.message.reply_text("🔔 No active reminders.")
+            return
+
+        # --- REMINDER: CANCEL ---
+        cancel_reminder_match = re.search(r'cancel reminder (\d+)', text, re.IGNORECASE)
+        if cancel_reminder_match:
+            reminder_id = int(cancel_reminder_match.group(1))
+            if delete_reminder(user_id, reminder_id):
+                await update.message.reply_text(f"✅ Reminder {reminder_id} cancelled.")
+            else:
+                await update.message.reply_text("❌ Could not cancel reminder.")
             return
 
         # --- SEARCH ---
@@ -869,7 +1088,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ Could not solve that. Try: 2 + 2")
             return
 
-        # --- CONVERT ---        if re.search(r'convert (\d+\.?\d*) (\w+) to (\w+)', text, re.IGNORECASE):
+        # --- CONVERT ---
+        if re.search(r'convert (\d+\.?\d*) (\w+) to (\w+)', text, re.IGNORECASE):
             match = re.search(r'convert (\d+\.?\d*) (\w+) to (\w+)', text, re.IGNORECASE)
             value = float(match.group(1))
             from_unit = match.group(2).lower()
@@ -991,45 +1211,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 logger.info(f"✅ FORCE SAVED: {extracted}")
 
-        # --- REMINDERS ---
-        remind_match = re.search(r'remind me to (.+) in (\d+) (minutes?|mins?|seconds?|secs?|hours?|hrs?|days?)', text, re.IGNORECASE)
-        if remind_match:
-            task = remind_match.group(1)
-            amount = int(remind_match.group(2))
-            unit = remind_match.group(3)
-            if 'min' in unit:
-                delta = timedelta(minutes=amount)
-            elif 'hour' in unit or 'hr' in unit:
-                delta = timedelta(hours=amount)
-            elif 'day' in unit:
-                delta = timedelta(days=amount)
-            else:
-                delta = timedelta(seconds=amount)
-            remind_at = datetime.now() + delta
-            add_reminder(user_id, task, remind_at)
-            await update.message.reply_text(f"⏰ Got it! I'll remind you to '{task}' in {amount} {unit}.")
-            return
-
-        # --- TODO ---
-        if re.search(r'add task(?: |:)(.+)', text, re.IGNORECASE):
-            match = re.search(r'add task(?: |:)(.+)', text, re.IGNORECASE)
-            if match:
-                task = match.group(1).strip()
-                add_todo(user_id, task)
-                await update.message.reply_text(f"✅ Added task: {task}")
-            return
-
-        if re.search(r'show my tasks|my tasks', text, re.IGNORECASE):
-            todos = get_todos(user_id)
-            if todos:
-                tasks_text = "📝 Your tasks:\n"
-                for i, todo in enumerate(todos, 1):
-                    tasks_text += f"{i}. {todo['task']}\n"
-                await update.message.reply_text(tasks_text)
-            else:
-                await update.message.reply_text("✅ No pending tasks! You're all caught up.")
-            return
-
         # --- JOKE ---
         if re.search(r'tell me a joke|joke', text, re.IGNORECASE):
             jokes = [
@@ -1100,6 +1281,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['trivia_answer'] = q['a']
             return
 
+        # --- TODO ---
+        if re.search(r'add task(?: |:)(.+)', text, re.IGNORECASE):
+            match = re.search(r'add task(?: |:)(.+)', text, re.IGNORECASE)
+            if match:
+                task = match.group(1).strip()
+                add_todo(user_id, task)
+                await update.message.reply_text(f"✅ Added task: {task}")
+            return
+
+        if re.search(r'show my tasks|my tasks', text, re.IGNORECASE):
+            todos = get_todos(user_id)
+            if todos:
+                tasks_text = "📝 Your tasks:\n"
+                for i, todo in enumerate(todos, 1):
+                    tasks_text += f"{i}. {todo['task']}\n"
+                await update.message.reply_text(tasks_text)
+            else:
+                await update.message.reply_text("✅ No pending tasks! You're all caught up.")
+            return
+
         # --- NORMAL CHAT ---
         reply = ask_groq(user_id, text)
         await update.message.reply_text(reply)
@@ -1113,14 +1314,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
-    logger.info("🚀 Petoy 2.0 starting...")
-
+    
+    # Start background timer checker
     bot = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    timer_thread = threading.Thread(target=check_timers_and_reminders, args=(bot,), daemon=True)
+    timer_thread.start()
+    
+    logger.info("🚀 Petoy 2.0 starting with TIMERS & REMINDERS...")
+
     bot.add_handler(CommandHandler("start", start))
     bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     bot.add_handler(MessageHandler(filters.PHOTO, handle_message))
 
-    logger.info("✅ Petoy 2.0 is running!")
+    logger.info("✅ Petoy 2.0 is running with TIMERS & REMINDERS!")
     bot.run_polling()
 
 if __name__ == "__main__":
