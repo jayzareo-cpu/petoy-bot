@@ -473,7 +473,7 @@ def extract_image_prompt(text):
     return None
 
 # ============================================
-# IMAGE ANALYSIS
+# IMAGE ANALYSIS — ULTRA STRICT MATH
 # ============================================
 async def analyze_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -487,12 +487,72 @@ async def analyze_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         image_base64 = base64.b64encode(response.content).decode('utf-8')
         caption = update.message.caption if update.message.caption else ""
 
-        # --- STRICT MATH SOLVER ---
+        # --- ULTRA STRICT MATH SOLVER (NO PERSONALITY) ---
         if "solve" in caption.lower() or "homework" in caption.lower() or "math" in caption.lower():
-            task = """
-You are a strict math solver. DO NOT describe the image. DO NOT mention the user's age.
-DO NOT add thoughts or opinions. Only solve the math problems step-by-step and give the final answer.
-"""
+            math_prompt = """You are a math calculator. Your ONLY job is to solve math problems.
+
+IMPORTANT: You are NOT Petoy right now. You are a CALCULATOR.
+
+OUTPUT FORMAT (EXACTLY):
+1) answer
+2) answer
+3) answer
+4) answer
+5) answer
+6) answer
+
+RULES:
+- NO "Boss"
+- NO "bro"
+- NO "I love you"
+- NO "The user wants me to..."
+- NO explanations
+- NO steps
+- NO "Final answer?"
+- JUST the answers.
+- If there are 6 problems, give 6 answers.
+
+EXAMPLE:
+1) 5/6
+2) 5/9
+3) 11/8
+4) 4/3
+5) 7/5
+6) 3/4
+
+NOW SOLVE. ONLY ANSWERS."""
+            
+            await update.message.reply_text("📐 Solving...")
+            
+            url = "https://api.groq.com/openai/v1/chat/completions"
+            headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+            payload = {
+                "model": "qwen/qwen3.6-27b",
+                "messages": [
+                    {"role": "system", "content": "You are a calculator. You only output math answers. No personality."},
+                    {"role": "user", "content": [
+                        {"type": "text", "text": math_prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}}
+                    ]}
+                ],
+                "temperature": 0.0,
+                "max_tokens": 200
+            }
+            response = requests.post(url, headers=headers, json=payload)
+            data = response.json()
+            if "choices" in data:
+                reply = data["choices"][0]["message"]["content"]
+                # Clean up any leftover nonsense
+                reply = re.sub(r'(?i)boss.*', '', reply)
+                reply = re.sub(r'(?i)i love you.*', '', reply)
+                reply = re.sub(r'(?i)final answer\??.*', '', reply)
+                reply = reply.strip()
+                await update.message.reply_text(f"📐 {reply}")
+            else:
+                await update.message.reply_text(f"❌ Error: {data}")
+            return
+
+        # --- NON-MATH IMAGE ANALYSIS ---
         elif "describe" in caption.lower() or "explain" in caption.lower():
             task = "DESCRIBE this image in detail. Focus on what you see."
         elif "read" in caption.lower() or "text" in caption.lower():
@@ -507,12 +567,12 @@ DO NOT add thoughts or opinions. Only solve the math problems step-by-step and g
             "model": "qwen/qwen3.6-27b",
             "messages": [{"role": "user", "content": [{"type": "text", "text": task}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}}]}],
             "temperature": 0.1,
-            "max_tokens": 600
+            "max_tokens": 500
         }
         response = requests.post(url, headers=headers, json=payload)
         data = response.json()
         if "choices" in data:
-            await update.message.reply_text(f"📐 {data['choices'][0]['message']['content']}")
+            await update.message.reply_text(f"🖼️ {data['choices'][0]['message']['content']}")
         else:
             await update.message.reply_text(f"❌ Error: {data}")
     except Exception as e:
@@ -523,7 +583,6 @@ DO NOT add thoughts or opinions. Only solve the math problems step-by-step and g
 # GROQ AI WITH BLOCKED TOPICS
 # ============================================
 def ask_groq(user_id, question):
-    # Check if user MENTIONED a blocked topic
     blocked = get_blocked_topics(user_id)
     user_mentioned_blocked = any(topic in question.lower() for topic in blocked)
     
@@ -559,7 +618,6 @@ Your personality:
 - If the user mentions a blocked topic, you can reply about it briefly.
 - If the user talks about something unrelated, DO NOT mention blocked topics.
 - If the user says "stop talking about X", block that topic.
-- If you're not sure, ask: "Is it okay to talk about this?"
 
 🌍 LANGUAGE RULES:
 - Match the user's language EXACTLY.
@@ -982,14 +1040,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
-    logger.info("🚀 Petoy 2.0 starting with BLOCKED TOPICS...")
+    logger.info("🚀 Petoy 2.0 starting...")
 
     bot = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     bot.add_handler(CommandHandler("start", start))
     bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     bot.add_handler(MessageHandler(filters.PHOTO, handle_message))
 
-    logger.info("✅ Petoy 2.0 is running with BLOCKED TOPICS!")
+    logger.info("✅ Petoy 2.0 is running!")
     bot.run_polling()
 
 if __name__ == "__main__":
