@@ -17,9 +17,6 @@ from telegram.ext import Application, MessageHandler, filters, ContextTypes, Com
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ============================================
-# Environment Variables
-# ============================================
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -38,7 +35,6 @@ def init_db():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS messages (
                 id SERIAL PRIMARY KEY,
@@ -48,7 +44,6 @@ def init_db():
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id TEXT PRIMARY KEY,
@@ -59,7 +54,6 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS todos (
                 id SERIAL PRIMARY KEY,
@@ -69,7 +63,6 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS reminders (
                 id SERIAL PRIMARY KEY,
@@ -80,7 +73,6 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS notes (
                 id SERIAL PRIMARY KEY,
@@ -90,7 +82,6 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS blocked_topics (
                 id SERIAL PRIMARY KEY,
@@ -99,7 +90,6 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        
         conn.commit()
         conn.close()
         logger.info("✅ Database ready")
@@ -141,14 +131,6 @@ def get_blocked_topics(user_id):
     except Exception as e:
         logger.error(f"❌ Get blocked topics error: {e}")
         return []
-
-def is_topic_blocked(user_id, text):
-    blocked = get_blocked_topics(user_id)
-    text_lower = text.lower()
-    for topic in blocked:
-        if topic in text_lower:
-            return True
-    return False
 
 # ============================================
 # FLASK
@@ -504,27 +486,33 @@ async def analyze_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         image_base64 = base64.b64encode(response.content).decode('utf-8')
         caption = update.message.caption if update.message.caption else ""
-        if "solve" in caption.lower() or "answer" in caption.lower() or "homework" in caption.lower():
-            task = "SOLVE the problems in this image. Give only the answers in a numbered list."
+
+        # --- STRICT MATH SOLVER ---
+        if "solve" in caption.lower() or "homework" in caption.lower() or "math" in caption.lower():
+            task = """
+You are a strict math solver. DO NOT describe the image. DO NOT mention the user's age.
+DO NOT add thoughts or opinions. Only solve the math problems step-by-step and give the final answer.
+"""
         elif "describe" in caption.lower() or "explain" in caption.lower():
-            task = "DESCRIBE this image in detail."
+            task = "DESCRIBE this image in detail. Focus on what you see."
         elif "read" in caption.lower() or "text" in caption.lower():
-            task = "Read and extract ALL text from this image."
+            task = "Read and extract ALL text from this image. Do not add extra commentary."
         else:
-            task = "Analyze this image. If it's homework or math, solve it. If it's a photo, describe it briefly."
+            task = "Analyze this image. If it's homework or math, solve it strictly. If it's a photo, describe it briefly."
+
         await update.message.reply_text("🔍 Analyzing...")
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
         payload = {
             "model": "qwen/qwen3.6-27b",
             "messages": [{"role": "user", "content": [{"type": "text", "text": task}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}}]}],
-            "temperature": 0.3,
-            "max_tokens": 500
+            "temperature": 0.1,
+            "max_tokens": 600
         }
         response = requests.post(url, headers=headers, json=payload)
         data = response.json()
         if "choices" in data:
-            await update.message.reply_text(f"🖼️ {data['choices'][0]['message']['content']}")
+            await update.message.reply_text(f"📐 {data['choices'][0]['message']['content']}")
         else:
             await update.message.reply_text(f"❌ Error: {data}")
     except Exception as e:
@@ -535,9 +523,10 @@ async def analyze_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # GROQ AI WITH BLOCKED TOPICS
 # ============================================
 def ask_groq(user_id, question):
-    if is_topic_blocked(user_id, question):
-        return "🔇 I'm not allowed to talk about that, boss. You told me to stop."
-
+    # Check if user MENTIONED a blocked topic
+    blocked = get_blocked_topics(user_id)
+    user_mentioned_blocked = any(topic in question.lower() for topic in blocked)
+    
     user_info = get_user_info(user_id)
     context = ""
     if user_info:
@@ -549,10 +538,6 @@ def ask_groq(user_id, question):
             context += f"Their zodiac sign is {user_info['zodiac']}. "
         if user_info.get("facts"):
             context += f"Additional facts: {user_info['facts']}. "
-    
-    blocked = get_blocked_topics(user_id)
-    if blocked:
-        context += f"Blocked topics: {', '.join(blocked)}. Never mention these again."
 
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
@@ -569,7 +554,12 @@ Your personality:
 - Call the user "boss" or "bro" sometimes.
 - Keep replies short and punchy.
 
-🚫 IMPORTANT: NEVER bring up blocked topics. If the user mentioned a blocked topic, they're testing you. Just say "I'm not allowed to talk about that."
+🚫 TOPIC RULES (CRITICAL):
+- NEVER bring up blocked topics on your own.
+- If the user mentions a blocked topic, you can reply about it briefly.
+- If the user talks about something unrelated, DO NOT mention blocked topics.
+- If the user says "stop talking about X", block that topic.
+- If you're not sure, ask: "Is it okay to talk about this?"
 
 🌍 LANGUAGE RULES:
 - Match the user's language EXACTLY.
