@@ -473,7 +473,7 @@ def extract_image_prompt(text):
     return None
 
 # ============================================
-# IMAGE ANALYSIS — ULTRA STRICT MATH
+# IMAGE ANALYSIS — ALL FIXES
 # ============================================
 async def analyze_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -486,33 +486,88 @@ async def analyze_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         image_base64 = base64.b64encode(response.content).decode('utf-8')
         caption = update.message.caption if update.message.caption else ""
+        caption_lower = caption.lower()
 
-        # --- ULTRA STRICT MATH SOLVER (NO PERSONALITY) ---
-        if "solve" in caption.lower() or "homework" in caption.lower() or "math" in caption.lower():
-            math_prompt = """You are a math calculator. Your ONLY job is to solve math problems.
+        # --- NEGATIVE COMMANDS (30+ ways to say "don't") ---
+        negative_keywords = [
+            "don't solve", "dont solve", "no solve", "not solve", "do not solve",
+            "don't describe", "dont describe", "no describe", "not describe", "do not describe",
+            "don't read", "dont read", "no read", "not read", "do not read",
+            "don't analyze", "dont analyze", "no analyze", "not analyze", "do not analyze",
+            "don't explain", "dont explain", "no explain", "not explain", "do not explain",
+            "don't answer", "dont answer", "no answer", "not answer", "do not answer",
+            "don't tell", "dont tell", "no tell", "not tell", "do not tell",
+            "no math", "no description", "no analysis", "no explanation",
+            "skip solve", "skip describe", "skip read", "skip analysis",
+            "ignore solve", "ignore describe", "ignore read", "ignore analysis",
+            "cancel solve", "cancel describe", "cancel read", "cancel analysis"
+        ]
+        
+        for neg in negative_keywords:
+            if neg in caption_lower:
+                await update.message.reply_text("✅ Got it, boss. I'll do what you asked.")
+                return
 
-IMPORTANT: You are NOT Petoy right now. You are a CALCULATOR.
-
-OUTPUT FORMAT (EXACTLY):
-1) answer
-2) answer
-3) answer
-4) answer
-5) answer
-6) answer
+        # --- LOCATION / PLACE DETECTION ---
+        location_keywords = ["where is this", "where do you think this is", "what place is this", "location", "place"]
+        if any(keyword in caption_lower for keyword in location_keywords):
+            location_prompt = """You are a location analyzer. Guess where this image was taken.
 
 RULES:
-- NO "Boss"
-- NO "bro"
-- NO "I love you"
-- NO "The user wants me to..."
-- NO explanations
-- NO steps
-- NO "Final answer?"
-- JUST the answers.
-- If there are 6 problems, give 6 answers.
+- Look for clues like landmarks, signs, architecture, language, nature, weather, culture.
+- Make your best guess.
+- If unsure, say "I think this might be..." or "This looks like..."
+- DO NOT describe the image in detail.
+- DO NOT solve anything.
+- ONLY give your location guess.
+- Be brief, 2-3 sentences max.
+- Plain text only. No LaTeX. No personality."""
 
-EXAMPLE:
+            await update.message.reply_text("📍 Figuring out where this is...")
+            
+            url = "https://api.groq.com/openai/v1/chat/completions"
+            headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+            payload = {
+                "model": "qwen/qwen3.6-27b",
+                "messages": [
+                    {"role": "system", "content": "You are a location analyzer. Plain text only. No LaTeX. No personality."},
+                    {"role": "user", "content": [
+                        {"type": "text", "text": location_prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}}
+                    ]}
+                ],
+                "temperature": 0.3,
+                "max_tokens": 150
+            }
+            response = requests.post(url, headers=headers, json=payload)
+            data = response.json()
+            if "choices" in data:
+                reply = data["choices"][0]["message"]["content"]
+                # Clean up
+                reply = re.sub(r'<think>.*?</think>', '', reply, flags=re.DOTALL)
+                reply = re.sub(r'\$\\frac\{(\d+)\}\{(\d+)\}\$', r'\1/\2', reply)
+                reply = re.sub(r'\\\[|\\\]|\\\(|\\\)', '', reply)
+                reply = re.sub(r'(?i)boss.*', '', reply)
+                reply = re.sub(r'(?i)bro.*', '', reply)
+                reply = reply.strip()
+                await update.message.reply_text(f"📍 {reply}")
+            else:
+                await update.message.reply_text(f"❌ Error: {data}")
+            return
+
+        # --- INSTRUCTIONS MODE (ONLY if user asks) ---
+        if "teach me" in caption_lower or "show steps" in caption_lower or "instructions" in caption_lower:
+            task = """Teach the user how to solve these problems. Show step-by-step instructions.
+            Explain how to add fractions with like denominators.
+            Use clear, simple language.
+            Plain text only. No LaTeX."""
+            mode = "📚 Teaching..."
+        else:
+            # --- ULTRA STRICT MATH SOLVER ---
+            if "solve" in caption_lower or "homework" in caption_lower or "math" in caption_lower:
+                math_prompt = """You are a math calculator. ONLY output answers.
+
+FORMAT:
 1) 5/6
 2) 5/9
 3) 11/8
@@ -520,59 +575,77 @@ EXAMPLE:
 5) 7/5
 6) 3/4
 
-NOW SOLVE. ONLY ANSWERS."""
-            
-            await update.message.reply_text("📐 Solving...")
-            
-            url = "https://api.groq.com/openai/v1/chat/completions"
-            headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-            payload = {
-                "model": "qwen/qwen3.6-27b",
-                "messages": [
-                    {"role": "system", "content": "You are a calculator. You only output math answers. No personality."},
-                    {"role": "user", "content": [
-                        {"type": "text", "text": math_prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}}
-                    ]}
-                ],
-                "temperature": 0.0,
-                "max_tokens": 200
-            }
-            response = requests.post(url, headers=headers, json=payload)
-            data = response.json()
-            if "choices" in data:
-                reply = data["choices"][0]["message"]["content"]
-                # Clean up any leftover nonsense
-                reply = re.sub(r'(?i)boss.*', '', reply)
-                reply = re.sub(r'(?i)i love you.*', '', reply)
-                reply = re.sub(r'(?i)final answer\??.*', '', reply)
-                reply = reply.strip()
-                await update.message.reply_text(f"📐 {reply}")
+RULES:
+- NO "Boss", "bro", "I love you"
+- NO explanations, NO steps, NO "Final answer?"
+- NO <think> tags
+- NO LaTeX
+- Plain text only.
+- If 6 problems, give 6 answers."""
+
+                await update.message.reply_text("📐 Solving...")
+                
+                url = "https://api.groq.com/openai/v1/chat/completions"
+                headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+                payload = {
+                    "model": "qwen/qwen3.6-27b",
+                    "messages": [
+                        {"role": "system", "content": "You are a calculator. Plain text only. No LaTeX. No personality."},
+                        {"role": "user", "content": [
+                            {"type": "text", "text": math_prompt},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}}
+                        ]}
+                    ],
+                    "temperature": 0.0,
+                    "max_tokens": 200
+                }
+                response = requests.post(url, headers=headers, json=payload)
+                data = response.json()
+                if "choices" in data:
+                    reply = data["choices"][0]["message"]["content"]
+                    # Clean up
+                    reply = re.sub(r'<think>.*?</think>', '', reply, flags=re.DOTALL)
+                    reply = re.sub(r'\$\\frac\{(\d+)\}\{(\d+)\}\$', r'\1/\2', reply)
+                    reply = re.sub(r'\\\[|\\\]|\\\(|\\\)', '', reply)
+                    reply = re.sub(r'(?i)boss.*', '', reply)
+                    reply = re.sub(r'(?i)bro.*', '', reply)
+                    reply = re.sub(r'(?i)final answer\??.*', '', reply)
+                    reply = reply.strip()
+                    await update.message.reply_text(f"📐 {reply}")
+                else:
+                    await update.message.reply_text(f"❌ Error: {data}")
+                return
+
+            # --- DESCRIPTION ---
+            if "describe" in caption_lower or "explain" in caption_lower:
+                task = "DESCRIBE this image in detail. Focus on what you see. Plain text. No LaTeX."
+                mode = "🔍 Describing..."
+            # --- READ TEXT ---
+            elif "read" in caption_lower or "text" in caption_lower:
+                task = "Read and extract ALL text from this image. Plain text only."
+                mode = "📖 Reading text..."
             else:
-                await update.message.reply_text(f"❌ Error: {data}")
-            return
+                task = "Analyze this image. If it's math, solve it. If it's a photo, describe it. Plain text. No LaTeX."
+                mode = "🔍 Analyzing..."
 
-        # --- NON-MATH IMAGE ANALYSIS ---
-        elif "describe" in caption.lower() or "explain" in caption.lower():
-            task = "DESCRIBE this image in detail. Focus on what you see."
-        elif "read" in caption.lower() or "text" in caption.lower():
-            task = "Read and extract ALL text from this image. Do not add extra commentary."
-        else:
-            task = "Analyze this image. If it's homework or math, solve it strictly. If it's a photo, describe it briefly."
-
-        await update.message.reply_text("🔍 Analyzing...")
+        await update.message.reply_text(mode)
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
         payload = {
             "model": "qwen/qwen3.6-27b",
             "messages": [{"role": "user", "content": [{"type": "text", "text": task}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}}]}],
-            "temperature": 0.1,
+            "temperature": 0.3,
             "max_tokens": 500
         }
         response = requests.post(url, headers=headers, json=payload)
         data = response.json()
         if "choices" in data:
-            await update.message.reply_text(f"🖼️ {data['choices'][0]['message']['content']}")
+            reply = data["choices"][0]["message"]["content"]
+            reply = re.sub(r'<think>.*?</think>', '', reply, flags=re.DOTALL)
+            reply = re.sub(r'\$\\frac\{(\d+)\}\{(\d+)\}\$', r'\1/\2', reply)
+            reply = re.sub(r'\\\[|\\\]|\\\(|\\\)', '', reply)
+            reply = reply.strip()
+            await update.message.reply_text(f"🖼️ {reply}")
         else:
             await update.message.reply_text(f"❌ Error: {data}")
     except Exception as e:
@@ -613,10 +686,9 @@ Your personality:
 - Call the user "boss" or "bro" sometimes.
 - Keep replies short and punchy.
 
-🚫 TOPIC RULES (CRITICAL):
+🚫 TOPIC RULES:
 - NEVER bring up blocked topics on your own.
-- If the user mentions a blocked topic, you can reply about it briefly.
-- If the user talks about something unrelated, DO NOT mention blocked topics.
+- If the user mentions a blocked topic, you can reply briefly.
 - If the user says "stop talking about X", block that topic.
 
 🌍 LANGUAGE RULES:
@@ -682,15 +754,17 @@ from telegram.ext import Application, MessageHandler, filters, CommandHandler, C
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🧠 **Petoy 2.0 — Self-Learning AI**\n\n"
-        "🤖 I learn from my mistakes! If I bring up something you don't like, say:\n"
-        "🚫 **'stop talking about [topic]'**\n"
-        "I'll remember and never mention it again.\n\n"
-        "🔍 **Search:** 'search for Elon Musk'\n"
-        "📝 **Notes:** 'save note: meeting at 3pm'\n"
-        "🧮 **Math:** 'solve 2+2'\n"
-        "🖼️ **Image:** 'make me an image of a cat'\n"
-        "📸 **Send a photo** and I'll analyze it!\n\n"
+        "🧠 **Petoy 2.0**\n\n"
+        "📸 **Send a photo with a caption:**\n"
+        "• 'solve' — get only the answers\n"
+        "• 'teach me' — get step-by-step instructions\n"
+        "• 'describe' — get a description\n"
+        "• 'where is this' — guess the location\n"
+        "• 'don't solve' — cancel math solving\n\n"
+        "🧠 I learn from my mistakes! Say 'stop talking about [topic]' to block it.\n\n"
+        "🔍 'search for Elon Musk'\n"
+        "📝 'save note: meeting at 3pm'\n"
+        "🖼️ 'make me an image of a cat'\n"
         "🌍 I speak ANY language!"
     )
 
@@ -795,8 +869,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ Could not solve that. Try: 2 + 2")
             return
 
-        # --- CONVERT ---
-        if re.search(r'convert (\d+\.?\d*) (\w+) to (\w+)', text, re.IGNORECASE):
+        # --- CONVERT ---        if re.search(r'convert (\d+\.?\d*) (\w+) to (\w+)', text, re.IGNORECASE):
             match = re.search(r'convert (\d+\.?\d*) (\w+) to (\w+)', text, re.IGNORECASE)
             value = float(match.group(1))
             from_unit = match.group(2).lower()
